@@ -15,8 +15,13 @@
 #include <stdexcept>
 
 #if defined(_WIN32)
+#include <windows.h>
 #define WIRE_POPEN  _popen
 #define WIRE_PCLOSE _pclose
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#define WIRE_POPEN  popen
+#define WIRE_PCLOSE pclose
 #else
 #define WIRE_POPEN  popen
 #define WIRE_PCLOSE pclose
@@ -75,16 +80,28 @@ static std::string platform_asset_name() noexcept {
 
 /** Returns path to the currently running executable. */
 static std::string current_executable_path() noexcept {
+#if defined(__APPLE__)
+    char path[1024];
+    uint32_t size = sizeof(path);
+    if (_NSGetExecutablePath(path, &size) == 0) {
+        std::error_code ec;
+        auto canonical_p = std::filesystem::canonical(path, ec);
+        if (!ec) return canonical_p.string();
+        return std::string(path);
+    }
+    return "";
+#elif defined(_WIN32)
+    char path[MAX_PATH];
+    if (GetModuleFileNameA(NULL, path, MAX_PATH) > 0) {
+        return std::string(path);
+    }
+    return "";
+#else
     std::error_code ec;
     auto p = std::filesystem::read_symlink("/proc/self/exe", ec);
     if (!ec) return p.string();
-    // macOS
-#if defined(__APPLE__)
-    // Use _NSGetExecutablePath via popen as a portable fallback
-    std::string out = run_command_capture("readlink -f /proc/self/exe 2>/dev/null || true");
-    if (!out.empty()) return out;
-#endif
     return "";
+#endif
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -251,26 +268,33 @@ bool UpdateManager::download_and_apply_update(const std::string& github_repo) no
     std::printf("  2. Copy %s to your Wire install folder\n", new_bin.string().c_str());
     std::printf("  3. Restart Wire\n\n");
 #else
-    // On macOS/Linux we can try to replace in-place
+    // On macOS/Linux we can replace in-place by unlinking the target inode first
     std::string self = current_executable_path();
     if (!self.empty() && std::filesystem::exists(self)) {
-        // Backup old binary
         std::string backup_bin = self + ".bak";
         std::error_code ec;
+        // 1. Backup old binary
         std::filesystem::copy_file(self, backup_bin,
             std::filesystem::copy_options::overwrite_existing, ec);
+        // 2. Unlink current running executable
+        std::filesystem::remove(self, ec);
+        // 3. Copy new binary to path
         std::filesystem::copy_file(new_bin, self,
             std::filesystem::copy_options::overwrite_existing, ec);
+
+        std::system(("chmod +x \"" + self + "\"").c_str());
+        std::system(("xattr -dr com.apple.quarantine \"" + self + "\" 2>/dev/null || true").c_str());
+
         if (!ec) {
             std::printf("[Updater] ✓ Binary replaced in-place at: %s\n", self.c_str());
             std::printf("[Updater] Old binary backed up to: %s\n", backup_bin.c_str());
-            std::printf("[Updater] Restart Wire to run the new version.\n\n");
+            std::printf("[Updater] Restart Wire to run the new version!\n\n");
             return true;
         }
     }
-    // Fallback: tell user to copy manually
+    // Fallback: tell user to copy manually if path wasn't writable
     std::printf("[Updater] To apply the update, run:\n");
-    std::printf("  cp \"%s\" /usr/local/bin/wire_tui_interactive\n\n", new_bin.string().c_str());
+    std::printf("  cp \"%s\" \"%s\"\n\n", new_bin.string().c_str(), self.empty() ? "/usr/local/bin/wire_tui_interactive" : self.c_str());
 #endif
 
     return true;
