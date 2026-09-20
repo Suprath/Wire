@@ -55,7 +55,6 @@ RUN pip3 install --no-cache-dir \
     pycparser \
     ply \
     colorama \
-    astshapes \
     pyelftools
 
 # Create workspace directory
