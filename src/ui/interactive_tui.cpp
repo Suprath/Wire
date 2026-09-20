@@ -274,6 +274,10 @@ int main() {
                             std::string plain_msg(decrypted->begin(), decrypted->end());
                             ledger.append_message(pkt.data.data(), pkt.data.size(), 1700000000);
 
+                            // Dynamic Return Path Roaming: update target IP:Port if peer changed networks
+                            s->target_ip = pkt.sender_ip;
+                            s->target_port = pkt.sender_port;
+
                             s->chat_history.push_back({ s->alias, plain_msg, "19:20", false });
 
                             if (active_session_index < 0) {
