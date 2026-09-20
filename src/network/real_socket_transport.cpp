@@ -85,18 +85,14 @@ bool RealSocketTransport::send_packet(const std::string& target_ip, uint16_t tar
         if (!bind_port(0)) return false;
     }
 
-    std::vector<std::string> candidates = {
-        target_ip,
-        "wire-peer-b",
-        "wire-peer-a",
-        "wire_peer_b",
-        "wire_peer_a",
-        "wire-peer-b-1",
-        "wire-peer-a-1",
-        "127.0.0.1",
-        "255.255.255.255",
-        "host.docker.internal"
-    };
+    std::vector<std::string> candidates;
+    if (!target_ip.empty()) {
+        candidates.push_back(target_ip);
+    }
+    if (target_ip != "127.0.0.1") {
+        candidates.push_back("127.0.0.1");
+        candidates.push_back("255.255.255.255");
+    }
 
     bool any_sent = false;
 

@@ -31,6 +31,10 @@ endif()
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+if(WIN32)
+    link_libraries(ws2_32)
+endif()
+
 # Core Libraries
 add_library(wire_crypto STATIC
     src/crypto/chacha20_prng.cpp
