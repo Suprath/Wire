@@ -13,6 +13,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
+// MSVC does not define ssize_t — use a signed 64-bit alias
+using wire_ssize_t = SSIZE_T;
 #else
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -21,6 +23,7 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <fcntl.h>
+using wire_ssize_t = ssize_t;
 #endif
 
 namespace wire::network {
@@ -116,9 +119,9 @@ bool RealSocketTransport::send_packet(const std::string& target_ip, uint16_t tar
         }
 
         if (resolved && dest.sin_addr.s_addr != 0) {
-            ssize_t sent = sendto(m_sockfd, reinterpret_cast<const char*>(data), len, 0,
+            wire_ssize_t sent = sendto(m_sockfd, reinterpret_cast<const char*>(data), static_cast<int>(len), 0,
                                   reinterpret_cast<sockaddr*>(&dest), sizeof(dest));
-            if (sent == static_cast<ssize_t>(len)) {
+            if (sent == static_cast<wire_ssize_t>(len)) {
                 any_sent = true;
             }
         }
@@ -134,7 +137,7 @@ std::optional<SocketPacket> RealSocketTransport::receive_packet() noexcept {
     sockaddr_in sender_addr{};
     socklen_t addr_len = sizeof(sender_addr);
 
-    ssize_t recvd = recvfrom(m_sockfd, reinterpret_cast<char*>(buffer), sizeof(buffer), 0,
+    wire_ssize_t recvd = recvfrom(m_sockfd, reinterpret_cast<char*>(buffer), static_cast<int>(sizeof(buffer)), 0,
                              reinterpret_cast<sockaddr*>(&sender_addr), &addr_len);
 
     if (recvd <= 0) {

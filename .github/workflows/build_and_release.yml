@@ -35,32 +35,45 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup CMake
-        uses: mlocati/setup-cmake@v3
-        with:
-          cmake-version: '3.28.x'
+      # GitHub-hosted runners ship with CMake 3.25+, no extra setup needed.
+      - name: Verify CMake Version
+        run: cmake --version
 
-      - name: Configure CMake
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build Executables
-        run: cmake --build build --config Release
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
 
-      - name: Run CTest Automated Suite
-        run: ctest --test-dir build --output-on-failure -C Release
+      - name: Build Executables
+        run: cmake --build build --config Release --parallel
+
+      # RealSocketTransportTest requires two live UDP peers — skip it in CI.
+      # All other 16 suites run normally.
+      - name: Run CTest Suite (Unix)
+        if: runner.os != 'Windows'
+        run: ctest --test-dir build --output-on-failure -C Release --exclude-regex RealSocketTransportTest
+
+      - name: Run CTest Suite (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: ctest --test-dir build --output-on-failure -C Release --exclude-regex RealSocketTransportTest
+
+      # ── Packaging ─────────────────────────────────────────────────────────
 
       - name: Package Windows Binary Artifacts
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force
-          if (Test-Path build/Release/wire_tui.exe) {
-            Copy-Item build/Release/wire_tui.exe dist/
-            Copy-Item build/Release/wire_tui_interactive.exe dist/
-          } else {
-            Copy-Item build/wire_tui.exe dist/
-            Copy-Item build/wire_tui_interactive.exe dist/
-          }
+          # MSVC puts binaries under build/Release/, MinGW puts them under build/
+          $binPath = if (Test-Path "build/Release/wire_tui.exe") { "build/Release" } else { "build" }
+          Copy-Item "$binPath/wire_tui.exe" dist/
+          Copy-Item "$binPath/wire_tui_interactive.exe" dist/
+          Write-Host "Packaged from: $binPath"
           Compress-Archive -Path dist/* -DestinationPath wire-windows-x64.zip
 
       - name: Package Linux Binary Artifacts
@@ -116,19 +129,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ./release-assets/*
-          name: Project Wire Multi-Platform Build (${{ github.ref_name }})
+          name: Project Wire ${{ github.ref_name }}
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}
           draft: false
           prerelease: false
           body: |
-            ## Project Wire Native Multi-Platform Binary Release
-            
-            Multi-platform native executables automatically compiled and verified via GitHub Actions CI/CD:
-            - **Windows (x64):** `wire-windows-x64.zip` (Contains `wire_tui.exe` and `wire_tui_interactive.exe`)
-            - **macOS (ARM64 / Apple Silicon):** `wire-macos-arm64.tar.gz` (Contains `wire_tui` and `wire_tui_interactive`)
-            - **Linux (x86_64):** `wire-linux-x86_64.tar.gz` (Contains `wire_tui` and `wire_tui_interactive`)
-            
-            ### SHA-256 Security Verification:
-            All binaries have passed 100% of the 17 containerized CTest unit test suites.
+            ## 🔐 Project Wire — Native Multi-Platform Release
+
+            Automatically compiled and verified via GitHub Actions CI/CD:
+
+            | Platform | Download | Contents |
+            |----------|----------|----------|
+            | **Windows x64** | `wire-windows-x64.zip` | `wire_tui.exe`, `wire_tui_interactive.exe` |
+            | **macOS ARM64** | `wire-macos-arm64.tar.gz` | `wire_tui`, `wire_tui_interactive` |
+            | **Linux x86_64** | `wire-linux-x86_64.tar.gz` | `wire_tui`, `wire_tui_interactive` |
+
+            ### ✅ Verified
+            All 16 automated CTest suites passed on every platform.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
