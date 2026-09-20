@@ -196,6 +196,8 @@ int main() {
                     size_t ciphertext_len = pkt.data.size() - hdr_size;
 
                     std::lock_guard<std::mutex> lock(session_mutex);
+                    bool decrypted_any = false;
+
                     for (size_t i = 0; i < sessions.size(); ++i) {
                         auto& s = sessions[i];
                         auto decrypted = s->ratchet.decrypt(hdr, ciphertext_ptr, ciphertext_len);
@@ -209,7 +211,18 @@ int main() {
                             if (static_cast<int>(i) == active_session_index) {
                                 update_layout();
                             }
+                            decrypted_any = true;
                             break;
+                        }
+                    }
+
+                    if (!decrypted_any) {
+                        if (sessions.empty()) {
+                            std::cout << "\n  [!] Incoming packet from " << pkt.sender_ip << ":" << pkt.sender_port
+                                      << " received, but no peer is added yet! Use /add to pair.\n\n" << std::flush;
+                        } else {
+                            std::cout << "\n  [!] Incoming packet from " << pkt.sender_ip << ":" << pkt.sender_port
+                                      << " received, but decryption failed! Ensure both peers typed the EXACT same passphrase and chose OPPOSITE roles (one Initiator, one Responder).\n\n" << std::flush;
                         }
                     }
                 }
@@ -316,9 +329,9 @@ int main() {
                 continue;
             }
 
-            std::cout << "  Your Role for this connection:\n";
-            std::cout << "    [1] Initiator (Alice)\n";
-            std::cout << "    [2] Responder (Bob)\n";
+            std::cout << "  Your Role for this connection (ONE device MUST choose 1, OTHER device MUST choose 2):\n";
+            std::cout << "    [1] Initiator (Alice - select on Device 1)\n";
+            std::cout << "    [2] Responder (Bob   - select on Device 2)\n";
             std::cout << "  Select Choice [1-2] (default: 1): ";
             std::cout << std::flush;
             bool is_alice = true;
