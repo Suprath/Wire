@@ -1,6 +1,7 @@
 # Build Directories
 build/
 build-docker/
+build-native/
 bin/
 out/
 .cache/

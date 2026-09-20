@@ -9,6 +9,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build-and-test:
     name: Build & Test (${{ matrix.os }})
@@ -31,8 +35,8 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup CMake & Ninja
-        uses: jvm-actions/setup-cmake@v1
+      - name: Setup CMake
+        uses: mlocati/setup-cmake@v3
         with:
           cmake-version: '3.28.x'
 
