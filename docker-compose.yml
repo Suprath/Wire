@@ -14,3 +14,27 @@ services:
       - CXX=clang++-18
     stdin_open: true
     tty: true
+
+  wire-peer-a:
+    image: wire-sel4-builder:latest
+    container_name: wire_peer_a
+    volumes:
+      - .:/workspace
+    environment:
+      - PEER_NAME=Peer_A
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    command: ./build-docker/wire_tui_interactive
+
+  wire-peer-b:
+    image: wire-sel4-builder:latest
+    container_name: wire_peer_b
+    volumes:
+      - .:/workspace
+    environment:
+      - PEER_NAME=Peer_B
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    command: ./build-docker/wire_tui_interactive

@@ -1,6 +1,6 @@
 /**
  * @file imessage_tui.cpp
- * @brief Implementation of Minimal iMessage-Style Modern Terminal UI
+ * @brief Implementation of Terminal UI/UX Screens (Genesis Setup & Chat)
  * @project Project Wire
  */
 
@@ -10,13 +10,52 @@
 
 namespace wire::ui {
 
-void iMessageTUI::render_layout(
+void iMessageTUI::render_main_menu(const std::string& my_pubkey_hex, size_t contact_count) const noexcept {
+    std::cout << "\033[2J\033[H"; // Clear screen
+    std::cout << "=======================================================================\n";
+    std::cout << "  PROJECT WIRE — AETHER-seL4 SECURE P2P COMMUNICATIONS DASHBOARD\n";
+    std::cout << "  Identity Key Hash: " << my_pubkey_hex.substr(0, 24) << "...\n";
+    std::cout << "  Saved Contacts:    " << contact_count << " Peer(s)\n";
+    std::cout << "=======================================================================\n\n";
+
+    std::cout << "  [1] 🔑 View My Genesis Entanglement Key & QR Payload\n";
+    std::cout << "  [2] ➕ Add New Peer Contact (Paste Genesis Key / Hash & Set Name)\n";
+    std::cout << "  [3] 💬 Open Active Peer Chat Session\n";
+    std::cout << "  [4] 🚪 Exit Session\n\n";
+    std::cout << "  Select Option [1-4]: ";
+}
+
+void iMessageTUI::render_my_genesis_key(const std::string& armored_key_text, const std::string& qr_payload) const noexcept {
+    std::cout << "\033[2J\033[H"; // Clear screen
+    std::cout << "=======================================================================\n";
+    std::cout << "  MY GENESIS ENTANGLEMENT DATA (Share with your Peer)\n";
+    std::cout << "=======================================================================\n\n";
+
+    std::cout << "--- BASE64 ARMORED KEY FILE (wire_genesis.key) ---\n";
+    std::cout << armored_key_text << "\n";
+
+    std::cout << "--- COMPACT QR CODE STRING PAYLOAD ---\n";
+    std::cout << qr_payload << "\n\n";
+
+    std::cout << "=======================================================================\n";
+    std::cout << "  Press ENTER to return to Main Menu...";
+}
+
+void iMessageTUI::render_add_peer_screen() const noexcept {
+    std::cout << "\033[2J\033[H"; // Clear screen
+    std::cout << "=======================================================================\n";
+    std::cout << "  ADD NEW PEER ENTANGLEMENT CONTACT\n";
+    std::cout << "=======================================================================\n\n";
+    std::cout << "  Instruction: Paste your peer's Armored Key File string or QR payload below.\n\n";
+}
+
+void iMessageTUI::render_chat_layout(
     const std::string& active_peer,
     bool is_connected,
     const std::vector<std::pair<std::string, std::string>>& contacts,
     const std::vector<ChatBubble>& history) const noexcept {
 
-    std::cout << "\033[2J\033[H"; // Clear terminal screen and move cursor to top-left
+    std::cout << "\033[2J\033[H"; // Clear terminal screen
 
     // Top System Header Bar
     std::cout << "┌──────────────────────────────────────────────────────────────────────────────┐\n";
@@ -27,9 +66,9 @@ void iMessageTUI::render_layout(
               << std::right << std::setw(18) << "│\n";
     std::cout << "├──────────────────────┬───────────────────────────────────────────────────────┤\n";
 
-    // Split Layout: Left Contact Sidebar (22 chars) vs Right Chat Main Window (55 chars)
+    // Split Layout: Left Contact Sidebar vs Right Chat Window
     size_t max_rows = std::max(contacts.size() + 2, history.size() * 3 + 2);
-    if (max_rows < 12) max_rows = 12;
+    if (max_rows < 10) max_rows = 10;
 
     for (size_t row = 0; row < max_rows; ++row) {
         // Render Left Sidebar Column
@@ -79,7 +118,7 @@ void iMessageTUI::render_layout(
     }
 
     std::cout << "├──────────────────────┴───────────────────────────────────────────────────────┤\n";
-    std::cout << "│ 🔒 Message #" << active_peer << ": ";
+    std::cout << "│ 🔒 Message #" << active_peer << " (type /menu to return, /add to add peer): ";
 }
 
 } // namespace wire::ui
