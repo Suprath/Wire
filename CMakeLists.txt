@@ -55,6 +55,10 @@ add_library(wire_contact STATIC
     src/contact/contact_manager.cpp
 )
 
+add_library(wire_update STATIC
+    src/update/update_manager.cpp
+)
+
 add_library(wire_ui STATIC
     src/ui/terminal_ui.cpp
 )
@@ -123,3 +127,7 @@ add_test(NAME UTF8SpecialCharsTest COMMAND test_utf8_special_chars)
 add_executable(test_contact_manager tests/test_contact_manager.cpp)
 target_link_libraries(test_contact_manager PRIVATE wire_contact wire_genesis wire_crypto wire_network wire_ledger)
 add_test(NAME ContactManagerTest COMMAND test_contact_manager)
+
+add_executable(test_update_manager tests/test_update_manager.cpp)
+target_link_libraries(test_update_manager PRIVATE wire_update)
+add_test(NAME UpdateManagerTest COMMAND test_update_manager)
