@@ -124,6 +124,10 @@ bool RealSocketTransport::send_packet(const std::string& target_ip, uint16_t tar
                                   reinterpret_cast<sockaddr*>(&dest), sizeof(dest));
             if (sent == static_cast<ssize_t>(len)) {
                 any_sent = true;
+                // Avoid sending duplicate fallback packets if unicast send succeeded
+                if (candidate != "255.255.255.255") {
+                    return true;
+                }
             }
         }
     }

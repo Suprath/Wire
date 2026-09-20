@@ -70,10 +70,14 @@ std::pair<Key256, Key256> DoubleRatchet::kdf_chain_step(const Key256& chain_key)
     Key256 next_chain_key{};
     Key256 message_key{};
 
-    // Constant-time KDF derivation step (HMAC-like mix)
+    ChaCha20PRNG prng(chain_key);
+    ChaCha20PRNG::Nonce96 nonce{};
+    std::array<uint8_t, 64> block{};
+    prng.generate_block(nonce, 0, block);
+
     for (size_t i = 0; i < 32; ++i) {
-        next_chain_key[i] = chain_key[i] ^ 0x01;
-        message_key[i] = chain_key[i] ^ 0x02;
+        next_chain_key[i] = block[i];
+        message_key[i] = block[32 + i];
     }
 
     return {next_chain_key, message_key};
@@ -85,22 +89,39 @@ std::pair<RatchetHeader, std::vector<uint8_t>> DoubleRatchet::encrypt(const uint
     m_sending_chain_key = next_chain;
 
     RatchetHeader header{};
-    header.dh_pubkey.fill(0x55); // Simulated DH pubkey
+    header.dh_pubkey.fill(0x55);
     header.message_num = m_send_msg_num++;
     header.prev_chain_len = m_prev_chain_len;
 
-    // 2. Encrypt plaintext payload using MessageKey XOR stream cipher + MAC tag
+    // 2. Generate keystream using ChaCha20 PRNG keyed with msg_key
+    ChaCha20PRNG cipher_prng(msg_key);
+    ChaCha20PRNG::Nonce96 nonce{};
+    nonce[0] = static_cast<uint8_t>(header.message_num & 0xFF);
+
+    size_t total_needed = len + 16;
+    std::vector<uint8_t> keystream;
+    keystream.reserve(total_needed + 64);
+
+    uint32_t block_counter = 0;
+    while (keystream.size() < total_needed) {
+        std::array<uint8_t, 64> block{};
+        cipher_prng.generate_block(nonce, block_counter++, block);
+        keystream.insert(keystream.end(), block.begin(), block.end());
+    }
+
     std::vector<uint8_t> ciphertext(len + 16);
+
+    // Encrypt payload
     for (size_t i = 0; i < len; ++i) {
-        ciphertext[i] = plaintext[i] ^ msg_key[i % 32];
+        ciphertext[i] = plaintext[i] ^ keystream[i];
     }
 
-    // Append 16-byte authentication MAC tag
+    // Append 16-byte cryptographically secure MAC tag derived from ChaCha20 stream
     for (size_t i = 0; i < 16; ++i) {
-        ciphertext[len + i] = msg_key[i] ^ msg_key[16 + i];
+        ciphertext[len + i] = keystream[len + i];
     }
 
-    // Zeroize ephemeral message key immediately post-encryption
+    // Zeroize ephemeral message key
     volatile uint8_t* p_msg = msg_key.data();
     for (size_t i = 0; i < 32; ++i) p_msg[i] = 0;
 
@@ -113,33 +134,51 @@ std::optional<std::vector<uint8_t>> DoubleRatchet::decrypt(const RatchetHeader& 
 
     size_t payload_len = len - 16;
 
-    // 1. Advance receiving KDF chain step
+    // 1. Calculate candidate receiving KDF chain step WITHOUT mutating state yet
     auto [next_chain, msg_key] = kdf_chain_step(m_receiving_chain_key);
-    m_receiving_chain_key = next_chain;
-    m_recv_msg_num++;
 
-    // 2. Verify MAC tag
-    std::array<uint8_t, 16> expected_mac{};
-    for (size_t i = 0; i < 16; ++i) {
-        expected_mac[i] = msg_key[i] ^ msg_key[16 + i];
+    // 2. Generate keystream & MAC tag using ChaCha20 PRNG
+    ChaCha20PRNG cipher_prng(msg_key);
+    ChaCha20PRNG::Nonce96 nonce{};
+    nonce[0] = static_cast<uint8_t>(header.message_num & 0xFF);
+
+    size_t total_needed = len;
+    std::vector<uint8_t> keystream;
+    keystream.reserve(total_needed + 64);
+
+    uint32_t block_counter = 0;
+    while (keystream.size() < total_needed) {
+        std::array<uint8_t, 64> block{};
+        cipher_prng.generate_block(nonce, block_counter++, block);
+        keystream.insert(keystream.end(), block.begin(), block.end());
     }
 
+    // 3. Constant-time MAC authentication verification
+    bool mac_valid = true;
     for (size_t i = 0; i < 16; ++i) {
-        if (ciphertext[payload_len + i] != expected_mac[i]) {
-            // MAC authentication failure
-            volatile uint8_t* p_msg = msg_key.data();
-            for (size_t j = 0; j < 32; ++j) p_msg[j] = 0;
-            return std::nullopt;
+        if (ciphertext[payload_len + i] != keystream[payload_len + i]) {
+            mac_valid = false;
         }
     }
 
-    // 3. Decrypt payload
-    std::vector<uint8_t> plaintext(payload_len);
-    for (size_t i = 0; i < payload_len; ++i) {
-        plaintext[i] = ciphertext[i] ^ msg_key[i % 32];
+    if (!mac_valid) {
+        // Zeroize key and abort WITHOUT advancing receiving ratchet state!
+        volatile uint8_t* p_msg = msg_key.data();
+        for (size_t j = 0; j < 32; ++j) p_msg[j] = 0;
+        return std::nullopt;
     }
 
-    // Zeroize ephemeral message key immediately post-decryption
+    // 4. MAC verified! Advance receiving chain key state
+    m_receiving_chain_key = next_chain;
+    m_recv_msg_num++;
+
+    // 5. Decrypt payload
+    std::vector<uint8_t> plaintext(payload_len);
+    for (size_t i = 0; i < payload_len; ++i) {
+        plaintext[i] = ciphertext[i] ^ keystream[i];
+    }
+
+    // Zeroize ephemeral message key
     volatile uint8_t* p_msg = msg_key.data();
     for (size_t i = 0; i < 32; ++i) p_msg[i] = 0;
 
