@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ProjectWire VERSION 0.3.0 LANGUAGES CXX C)
+project(ProjectWire VERSION 1.0.0 LANGUAGES CXX C)
 
 # Set C++20 Standard with strict memory safety & compiler warning flags
 set(CMAKE_CXX_STANDARD 20)
@@ -47,6 +47,14 @@ add_library(wire_ledger STATIC
     src/ledger/merkle_dag.cpp
 )
 
+add_library(wire_genesis STATIC
+    src/genesis/genesis_manager.cpp
+)
+
+add_library(wire_ui STATIC
+    src/ui/terminal_ui.cpp
+)
+
 # Protection Domains Executables (seL4 Microkit binaries)
 add_executable(wire_vault_pd src/pd/vault_pd.cpp)
 target_link_libraries(wire_vault_pd PRIVATE wire_crypto wire_network wire_ledger)
@@ -91,3 +99,15 @@ add_test(NAME MerkleDAGTest COMMAND test_merkle_dag)
 add_executable(test_capability_severing tests/test_capability_severing.cpp)
 target_link_libraries(test_capability_severing PRIVATE wire_crypto)
 add_test(NAME CapabilitySeveringTest COMMAND test_capability_severing)
+
+add_executable(test_genesis_manager tests/test_genesis_manager.cpp)
+target_link_libraries(test_genesis_manager PRIVATE wire_genesis wire_crypto)
+add_test(NAME GenesisManagerTest COMMAND test_genesis_manager)
+
+add_executable(test_virtio_serial_bridge tests/test_virtio_serial_bridge.cpp)
+target_link_libraries(test_virtio_serial_bridge PRIVATE wire_crypto)
+add_test(NAME VirtioSerialBridgeTest COMMAND test_virtio_serial_bridge)
+
+add_executable(test_terminal_ui tests/test_terminal_ui.cpp)
+target_link_libraries(test_terminal_ui PRIVATE wire_ui wire_network)
+add_test(NAME TerminalUITest COMMAND test_terminal_ui)
