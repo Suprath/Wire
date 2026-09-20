@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ProjectWire VERSION 1.2.0 LANGUAGES CXX C)
+project(ProjectWire VERSION 1.3.0 LANGUAGES CXX C)
 
 # Set C++20 Standard with strict memory safety & compiler warning flags
 set(CMAKE_CXX_STANDARD 20)
@@ -61,6 +61,7 @@ add_library(wire_update STATIC
 
 add_library(wire_ui STATIC
     src/ui/terminal_ui.cpp
+    src/ui/imessage_tui.cpp
 )
 
 # Main Terminal UI Client Executable
@@ -139,3 +140,7 @@ add_test(NAME UpdateManagerTest COMMAND test_update_manager)
 add_executable(test_portable_usb_mode tests/test_portable_usb_mode.cpp)
 target_link_libraries(test_portable_usb_mode PRIVATE wire_update)
 add_test(NAME PortableUSBModeTest COMMAND test_portable_usb_mode)
+
+add_executable(test_imessage_tui tests/test_imessage_tui.cpp)
+target_link_libraries(test_imessage_tui PRIVATE wire_ui)
+add_test(NAME iMessageTUITest COMMAND test_imessage_tui)
