@@ -28,9 +28,25 @@ int main() {
     wire::contact::ContactManager contacts;
     wire::network::RealSocketTransport socket;
 
-    // Read environment setup for Peer A vs Peer B
+    std::string my_peer_name = "Peer_A";
     const char* peer_env = std::getenv("PEER_NAME");
-    std::string my_peer_name = (peer_env != nullptr) ? peer_env : "Peer_A";
+    if (peer_env != nullptr) {
+        my_peer_name = peer_env;
+    } else {
+        std::cout << "=======================================================================\n";
+        std::cout << "  PROJECT WIRE — AETHER-seL4 SECURE P2P INTERACTIVE CLIENT\n";
+        std::cout << "=======================================================================\n\n";
+        std::cout << "  Select Peer Role for this terminal session:\n";
+        std::cout << "    [1] Peer A (Alice - Local UDP Port 9001 -> Remote 9002)\n";
+        std::cout << "    [2] Peer B (Bob   - Local UDP Port 9002 -> Remote 9001)\n\n";
+        std::cout << "  Select Choice [1-2] (default: 1): ";
+        std::string choice;
+        if (std::getline(std::cin, choice)) {
+            if (choice == "2" || choice == "B" || choice == "b" || choice == "Peer_B" || choice == "bob" || choice == "Bob") {
+                my_peer_name = "Peer_B";
+            }
+        }
+    }
 
     uint16_t local_port = 9001;
     uint16_t remote_port = 9002;

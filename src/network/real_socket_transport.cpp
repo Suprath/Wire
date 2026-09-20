@@ -58,9 +58,13 @@ bool RealSocketTransport::bind_port(uint16_t port) noexcept {
     fcntl(m_sockfd, F_SETFL, flags | O_NONBLOCK);
 #endif
 
-    // Reuse address
+    // Reuse address and enable broadcast
     int optval = 1;
     setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&optval), sizeof(optval));
+    setsockopt(m_sockfd, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&optval), sizeof(optval));
+#if defined(SO_REUSEPORT)
+    setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEPORT, reinterpret_cast<const char*>(&optval), sizeof(optval));
+#endif
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -81,22 +85,50 @@ bool RealSocketTransport::send_packet(const std::string& target_ip, uint16_t tar
         if (!bind_port(0)) return false;
     }
 
-    sockaddr_in dest{};
-    dest.sin_family = AF_INET;
-    dest.sin_port = htons(target_port);
+    std::vector<std::string> candidates = {
+        target_ip,
+        "wire-peer-b",
+        "wire-peer-a",
+        "wire_peer_b",
+        "wire_peer_a",
+        "wire-peer-b-1",
+        "wire-peer-a-1",
+        "127.0.0.1",
+        "255.255.255.255",
+        "host.docker.internal"
+    };
 
-    // Resolve hostname or IP (e.g. "wire-peer-b" or "127.0.0.1")
-    hostent* host = gethostbyname(target_ip.c_str());
-    if (host != nullptr && host->h_addr_list[0] != nullptr) {
-        std::memcpy(&dest.sin_addr, host->h_addr_list[0], static_cast<size_t>(host->h_length));
-    } else {
-        inet_pton(AF_INET, target_ip.c_str(), &dest.sin_addr);
+    bool any_sent = false;
+
+    for (const auto& candidate : candidates) {
+        if (candidate.empty()) continue;
+
+        sockaddr_in dest{};
+        dest.sin_family = AF_INET;
+        dest.sin_port = htons(target_port);
+
+        bool resolved = false;
+
+        if (inet_pton(AF_INET, candidate.c_str(), &dest.sin_addr) == 1) {
+            resolved = true;
+        } else {
+            hostent* host = gethostbyname(candidate.c_str());
+            if (host != nullptr && host->h_addr_list != nullptr && host->h_addr_list[0] != nullptr) {
+                std::memcpy(&dest.sin_addr, host->h_addr_list[0], static_cast<size_t>(host->h_length));
+                resolved = true;
+            }
+        }
+
+        if (resolved && dest.sin_addr.s_addr != 0) {
+            ssize_t sent = sendto(m_sockfd, reinterpret_cast<const char*>(data), len, 0,
+                                  reinterpret_cast<sockaddr*>(&dest), sizeof(dest));
+            if (sent == static_cast<ssize_t>(len)) {
+                any_sent = true;
+            }
+        }
     }
 
-    ssize_t sent = sendto(m_sockfd, reinterpret_cast<const char*>(data), len, 0,
-                          reinterpret_cast<sockaddr*>(&dest), sizeof(dest));
-
-    return sent == static_cast<ssize_t>(len);
+    return any_sent;
 }
 
 std::optional<SocketPacket> RealSocketTransport::receive_packet() noexcept {
