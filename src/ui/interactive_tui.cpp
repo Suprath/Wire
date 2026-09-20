@@ -100,7 +100,6 @@ int main() {
     hex_ss << std::hex << std::setfill('0');
     for (size_t i = 0; i < my_identity.size(); ++i) {
         hex_ss << std::setw(2) << static_cast<unsigned>(my_identity[i]);
-        if (i == 15) hex_ss << "\n                        ";
     }
     std::string my_identity_hex = hex_ss.str();
 
@@ -253,15 +252,15 @@ int main() {
 
         // ── /myid ────────────────────────────────────────────────────────
         if (user_input == "/myid") {
-            std::cout << "\n  ╔══════════════════════════════════════════════════════════════════╗\n";
-            std::cout << "  ║                  YOUR WIRE IDENTITY                              ║\n";
-            std::cout << "  ╠══════════════════════════════════════════════════════════════════╣\n";
+            std::cout << "\n  ╔═════════════════════════════════════════════════════════════════════════════════╗\n";
+            std::cout << "  ║                           YOUR WIRE IDENTITY                                    ║\n";
+            std::cout << "  ╠═════════════════════════════════════════════════════════════════════════════════╣\n";
             std::cout << "  ║  Nickname: " << my_nickname << "\n";
-            std::cout << "  ║  Hash:     " << my_identity_hex << "  ║\n";
+            std::cout << "  ║  Hash:     " << my_identity_hex << "\n";
             std::cout << "  ║  Port:     " << local_port << "\n";
-            std::cout << "  ╠══════════════════════════════════════════════════════════════════╣\n";
-            std::cout << "  ║  Share your IP + Port + Shared Secret with your peer to /add.    ║\n";
-            std::cout << "  ╚══════════════════════════════════════════════════════════════════╝\n\n";
+            std::cout << "  ╠═════════════════════════════════════════════════════════════════════════════════╣\n";
+            std::cout << "  ║  Share your IP + Port + Shared Secret with your peer to /add.                   ║\n";
+            std::cout << "  ╚═════════════════════════════════════════════════════════════════════════════════╝\n\n";
             continue;
         }
 
