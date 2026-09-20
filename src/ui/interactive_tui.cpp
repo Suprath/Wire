@@ -49,6 +49,16 @@ struct PeerSession {
         : alias(name), target_ip(ip), target_port(port), ratchet(root_key, is_alice) {}
 };
 
+/** Trim trailing carriage returns (\r), newlines (\n), and whitespace from inputs */
+static void trim_input(std::string& s) {
+    while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ' || s.back() == '\t')) {
+        s.pop_back();
+    }
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) {
+        s.erase(s.begin());
+    }
+}
+
 /** Derive a 256-bit key from a user passphrase */
 wire::crypto::Key256 derive_key_from_passphrase(const std::string& passphrase) {
     wire::crypto::Key256 key{};
@@ -122,8 +132,9 @@ int main() {
         std::cout << "  Enter your local nickname (e.g. Alice): ";
         std::cout << std::flush;
         std::string input_nick;
-        if (std::getline(std::cin, input_nick) && !input_nick.empty()) {
-            my_nickname = input_nick;
+        if (std::getline(std::cin, input_nick)) {
+            trim_input(input_nick);
+            if (!input_nick.empty()) my_nickname = input_nick;
         }
     }
 
@@ -135,8 +146,11 @@ int main() {
         std::cout << "  Enter your local UDP listening port (default 9001): ";
         std::cout << std::flush;
         std::string input_port;
-        if (std::getline(std::cin, input_port) && !input_port.empty()) {
-            try { local_port = static_cast<uint16_t>(std::stoi(input_port)); } catch (...) {}
+        if (std::getline(std::cin, input_port)) {
+            trim_input(input_port);
+            if (!input_port.empty()) {
+                try { local_port = static_cast<uint16_t>(std::stoi(input_port)); } catch (...) {}
+            }
         }
     }
 
@@ -250,6 +264,7 @@ int main() {
 
     std::string user_input;
     while (std::getline(std::cin, user_input)) {
+        trim_input(user_input);
 
         // ── /quit ────────────────────────────────────────────────────────
         if (user_input == "/quit" || user_input == "exit" || user_input == "/exit") {
@@ -310,21 +325,27 @@ int main() {
             std::cout << "  ─────────────────────────────\n";
             std::cout << "  Peer Nickname (display name): ";
             std::cout << std::flush;
-            if (!std::getline(std::cin, alias) || alias.empty()) {
+            if (!std::getline(std::cin, alias)) continue;
+            trim_input(alias);
+            if (alias.empty()) {
                 std::cout << "  [!] Cancelled — alias cannot be empty.\n\n";
                 continue;
             }
 
             std::cout << "  Target IP:Port (e.g. 192.168.1.5:9001): ";
             std::cout << std::flush;
-            if (!std::getline(std::cin, ip_port) || ip_port.empty()) {
+            if (!std::getline(std::cin, ip_port)) continue;
+            trim_input(ip_port);
+            if (ip_port.empty()) {
                 std::cout << "  [!] Cancelled — IP:Port cannot be empty.\n\n";
                 continue;
             }
 
             std::cout << "  Shared Passphrase / Secret Key (must match peer's key): ";
             std::cout << std::flush;
-            if (!std::getline(std::cin, passphrase) || passphrase.empty()) {
+            if (!std::getline(std::cin, passphrase)) continue;
+            trim_input(passphrase);
+            if (passphrase.empty()) {
                 std::cout << "  [!] Cancelled — secret key cannot be empty.\n\n";
                 continue;
             }
@@ -336,6 +357,7 @@ int main() {
             std::cout << std::flush;
             bool is_alice = true;
             if (std::getline(std::cin, role_choice)) {
+                trim_input(role_choice);
                 if (role_choice == "2" || role_choice == "B" || role_choice == "b" || role_choice == "Bob" || role_choice == "bob") {
                     is_alice = false;
                 }
