@@ -127,12 +127,139 @@ int main() {
 
     // Keyboard input loop for outgoing messages
     std::string user_input;
+
+    auto print_help = [&]() {
+        std::cout << "\n  ╔══════════════════════════════════════════════════╗\n";
+        std::cout << "  ║         PROJECT WIRE — AVAILABLE COMMANDS        ║\n";
+        std::cout << "  ╠══════════════════════════════════════════════════╣\n";
+        std::cout << "  ║  /add              Add a new peer                ║\n";
+        std::cout << "  ║  /peers            List all connected peers       ║\n";
+        std::cout << "  ║  /switch <alias>   Switch active chat target      ║\n";
+        std::cout << "  ║  /quit             Exit Wire                      ║\n";
+        std::cout << "  ║  <message>         Send message to active peer    ║\n";
+        std::cout << "  ╚══════════════════════════════════════════════════╝\n\n";
+    };
+
+    print_help();
+
     while (std::getline(std::cin, user_input)) {
+
+        // ── /quit ────────────────────────────────────────────────────────
         if (user_input == "/quit" || user_input == "exit" || user_input == "/exit") {
             running = false;
             break;
         }
 
+        // ── /help ────────────────────────────────────────────────────────
+        if (user_input == "/help" || user_input == "/?") {
+            print_help();
+            continue;
+        }
+
+        // ── /peers ───────────────────────────────────────────────────────
+        if (user_input == "/peers") {
+            std::cout << "\n  Connected peers:\n";
+            for (size_t i = 0; i < contact_list.size(); ++i) {
+                std::string marker = (contact_list[i].first == active_peer_alias) ? " ◀ active" : "";
+                std::cout << "    [" << i + 1 << "] " << contact_list[i].first
+                          << "  (" << contact_list[i].second << ")" << marker << "\n";
+            }
+            std::cout << "\n";
+            continue;
+        }
+
+        // ── /add ─────────────────────────────────────────────────────────
+        if (user_input == "/add") {
+            std::string alias, ip_port;
+
+            std::cout << "\n  Add New Peer\n";
+            std::cout << "  ─────────────────────────────\n";
+            std::cout << "  Alias (display name): ";
+            std::cout << std::flush;
+            if (!std::getline(std::cin, alias) || alias.empty()) {
+                std::cout << "  [!] Cancelled — alias cannot be empty.\n\n";
+                continue;
+            }
+
+            std::cout << "  IP:Port (e.g. 127.0.0.1:9002): ";
+            std::cout << std::flush;
+            if (!std::getline(std::cin, ip_port) || ip_port.empty()) {
+                std::cout << "  [!] Cancelled — IP:Port cannot be empty.\n\n";
+                continue;
+            }
+
+            // Parse IP and port from "ip:port" format
+            std::string peer_ip = "127.0.0.1";
+            uint16_t peer_port = remote_port;
+
+            auto colon = ip_port.find(':');
+            if (colon != std::string::npos) {
+                peer_ip = ip_port.substr(0, colon);
+                try {
+                    peer_port = static_cast<uint16_t>(std::stoi(ip_port.substr(colon + 1)));
+                } catch (...) {
+                    std::cout << "  [!] Invalid port — using default " << remote_port << "\n";
+                    peer_port = remote_port;
+                }
+            } else {
+                // Just an IP with no port
+                peer_ip = ip_port;
+            }
+
+            // Add to contact list sidebar
+            contact_list.push_back({alias, "CONNECTED"});
+
+            // Switch active target to the newly added peer
+            active_peer_alias = alias;
+            remote_ip = peer_ip;
+            remote_port = peer_port;
+
+            // Reset chat history for the new peer session
+            chat_history.clear();
+
+            std::cout << "  [✓] Peer \"" << alias << "\" added at " << peer_ip << ":" << peer_port << "\n\n";
+            tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+            continue;
+        }
+
+        // ── /switch <alias> ───────────────────────────────────────────────
+        if (user_input.rfind("/switch", 0) == 0) {
+            std::string target = user_input.size() > 8 ? user_input.substr(8) : "";
+            // Trim leading spaces
+            while (!target.empty() && target.front() == ' ') target.erase(target.begin());
+
+            if (target.empty()) {
+                std::cout << "  [!] Usage: /switch <alias>   (use /peers to list peers)\n\n";
+                continue;
+            }
+
+            bool found = false;
+            for (const auto& c : contact_list) {
+                if (c.first == target) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                std::cout << "  [!] Peer \"" << target << "\" not found. Use /peers to list peers.\n\n";
+                continue;
+            }
+
+            active_peer_alias = target;
+            chat_history.clear();
+            std::cout << "  [✓] Switched active chat to \"" << target << "\"\n\n";
+            tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+            continue;
+        }
+
+        // ── Unknown command ───────────────────────────────────────────────
+        if (!user_input.empty() && user_input[0] == '/') {
+            std::cout << "  [!] Unknown command: " << user_input << " — type /help for available commands.\n\n";
+            continue;
+        }
+
+        // ── Send message ──────────────────────────────────────────────────
         if (user_input.empty()) {
             tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
             continue;
