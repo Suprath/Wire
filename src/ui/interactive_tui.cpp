@@ -2,11 +2,6 @@
  * @file interactive_tui.cpp
  * @brief Real P2P Socket Inter-Container Terminal UI Application for Project Wire
  * @project Project Wire
- * 
- * @details
- * Connects Peer A and Peer B via real UDP network sockets across Docker containers or host processes.
- * - Outgoing typed messages are encrypted with Double Ratchet and transmitted over real sockets.
- * - Incoming real UDP packets are received, authenticated, decrypted, and displayed live in the chat stream.
  */
 
 #include "imessage_tui.hpp"
@@ -29,17 +24,50 @@
 #include <random>
 #include <iomanip>
 #include <sstream>
+#include <memory>
+#include <mutex>
 
 #if defined(_WIN32)
 #include <windows.h>
 #endif
+
+namespace {
+
+/**
+ * @struct PeerSession
+ * @brief Encapsulates an active peer contact session and crypto state.
+ */
+struct PeerSession {
+    std::string alias;
+    std::string target_ip;
+    uint16_t target_port;
+    wire::crypto::DoubleRatchet ratchet;
+    std::vector<wire::ui::ChatBubble> chat_history;
+
+    PeerSession(const std::string& name, const std::string& ip, uint16_t port,
+                const wire::crypto::Key256& root_key, bool is_alice)
+        : alias(name), target_ip(ip), target_port(port), ratchet(root_key, is_alice) {}
+};
+
+/** Derive a 256-bit key from a user passphrase */
+wire::crypto::Key256 derive_key_from_passphrase(const std::string& passphrase) {
+    wire::crypto::Key256 key{};
+    key.fill(0xAA); // Initial salt
+    for (size_t i = 0; i < passphrase.size(); ++i) {
+        uint8_t c = static_cast<uint8_t>(passphrase[i]);
+        key[i % 32] ^= c;
+        key[(i * 7 + 3) % 32] = static_cast<uint8_t>(key[(i * 7 + 3) % 32] + c + i);
+    }
+    return key;
+}
+
+} // anonymous namespace
 
 int main() {
 #if defined(_WIN32)
     // Enable UTF-8 input and output — fixes box-drawing characters in Windows terminal
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
-    // Enable Virtual Terminal Processing for ANSI colours (Windows 10+)
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD dwMode = 0;
     GetConsoleMode(hOut, &dwMode);
@@ -47,116 +75,120 @@ int main() {
 #endif
 
     // ── Load or generate persistent identity key ──────────────────────────────
-    // Stored at ~/.wire/identity.key  (or %APPDATA%\Wire\identity.key on Windows)
     std::string data_dir = wire::update::UpdateManager::get_user_data_directory();
     std::filesystem::path identity_path = std::filesystem::path(data_dir) / "identity.key";
     std::filesystem::create_directories(data_dir);
 
     wire::crypto::Key256 my_identity{};
 
-    // Try to load existing identity
     std::ifstream idf(identity_path, std::ios::binary);
     if (idf.is_open() && idf.read(reinterpret_cast<char*>(my_identity.data()), 32).gcount() == 32) {
         idf.close();
     } else {
-        // Generate a new random 32-byte identity
         std::random_device rd;
         std::mt19937_64 rng(rd());
         std::uniform_int_distribution<uint8_t> dist(0, 255);
         for (auto& b : my_identity) b = dist(rng);
 
-        // Save it for future launches
         std::ofstream odf(identity_path, std::ios::binary);
         if (odf.is_open()) {
             odf.write(reinterpret_cast<const char*>(my_identity.data()), 32);
         }
     }
 
-    // Build hex string of identity for /myid display
     std::ostringstream hex_ss;
     hex_ss << std::hex << std::setfill('0');
     for (size_t i = 0; i < my_identity.size(); ++i) {
         hex_ss << std::setw(2) << static_cast<unsigned>(my_identity[i]);
-        if (i == 15) hex_ss << "\n                        "; // split into two lines for readability
+        if (i == 15) hex_ss << "\n                        ";
     }
     std::string my_identity_hex = hex_ss.str();
 
     wire::ui::iMessageTUI tui;
-    wire::contact::ContactManager contacts;
     wire::network::RealSocketTransport socket;
+    wire::ledger::MerkleDAGLedger ledger;
 
-    std::string my_peer_name = "Peer_A";
-    const char* peer_env = std::getenv("PEER_NAME");
-    if (peer_env != nullptr) {
-        my_peer_name = peer_env;
+    // ── 1. Startup Prompts: Nickname & Local Port ────────────────────────────
+    std::cout << "=======================================================================\n";
+    std::cout << "  PROJECT WIRE — AETHER-seL4 SECURE P2P INTERACTIVE CLIENT\n";
+    std::cout << "=======================================================================\n\n";
+
+    std::string my_nickname = "User";
+    const char* nick_env = std::getenv("MY_NICKNAME");
+    if (nick_env == nullptr) nick_env = std::getenv("PEER_NAME");
+
+    if (nick_env != nullptr) {
+        my_nickname = nick_env;
     } else {
-        std::cout << "=======================================================================\n";
-        std::cout << "  PROJECT WIRE — AETHER-seL4 SECURE P2P INTERACTIVE CLIENT\n";
-        std::cout << "=======================================================================\n\n";
-        std::cout << "  Select Peer Role for this terminal session:\n";
-        std::cout << "    [1] Peer A (Alice - Local UDP Port 9001 -> Remote 9002)\n";
-        std::cout << "    [2] Peer B (Bob   - Local UDP Port 9002 -> Remote 9001)\n\n";
-        std::cout << "  Select Choice [1-2] (default: 1): ";
-        std::string choice;
-        if (std::getline(std::cin, choice)) {
-            if (choice == "2" || choice == "B" || choice == "b" || choice == "Peer_B" || choice == "bob" || choice == "Bob") {
-                my_peer_name = "Peer_B";
-            }
+        std::cout << "  Enter your local nickname (e.g. Alice): ";
+        std::cout << std::flush;
+        std::string input_nick;
+        if (std::getline(std::cin, input_nick) && !input_nick.empty()) {
+            my_nickname = input_nick;
         }
     }
 
     uint16_t local_port = 9001;
-    uint16_t remote_port = 9002;
-    std::string remote_ip = "wire-peer-b";
-
-    if (my_peer_name == "Peer_B") {
-        local_port = 9002;
-        remote_port = 9001;
-        remote_ip = "wire-peer-a";
+    const char* port_env = std::getenv("LOCAL_PORT");
+    if (port_env != nullptr) {
+        try { local_port = static_cast<uint16_t>(std::stoi(port_env)); } catch (...) {}
+    } else if (nick_env == nullptr) {
+        std::cout << "  Enter your local UDP listening port (default 9001): ";
+        std::cout << std::flush;
+        std::string input_port;
+        if (std::getline(std::cin, input_port) && !input_port.empty()) {
+            try { local_port = static_cast<uint16_t>(std::stoi(input_port)); } catch (...) {}
+        }
     }
 
     // Bind real local UDP socket
     if (!socket.bind_port(local_port)) {
-        // Fallback for running both on localhost
-        if (my_peer_name == "Peer_B") {
-            local_port = 9004;
-            remote_port = 9003;
-        } else {
-            local_port = 9003;
-            remote_port = 9004;
+        std::cout << "  [!] Port " << local_port << " busy, trying " << local_port + 1 << "...\n";
+        local_port += 1;
+        if (!socket.bind_port(local_port)) {
+            std::cout << "  [!] Error: Could not bind local UDP socket on port " << local_port << "\n";
+            return 1;
         }
-        socket.bind_port(local_port);
-        remote_ip = "127.0.0.1";
     }
 
-    // Shared root key for entanglement
-    wire::crypto::Key256 shared_root_key{};
-    shared_root_key.fill(0x55);
+    std::cout << "\n  [✓] Listening on UDP port " << local_port << " as \"" << my_nickname << "\".\n\n";
 
-    bool is_alice = (my_peer_name == "Peer_A");
-    wire::crypto::DoubleRatchet ratchet(shared_root_key, is_alice);
-    wire::ledger::MerkleDAGLedger ledger;
+    // ── 2. Session Management ────────────────────────────────────────────────
+    std::mutex session_mutex;
+    std::vector<std::shared_ptr<PeerSession>> sessions;
+    int active_session_index = -1;
 
-    std::string active_peer_alias = is_alice ? "Peer B" : "Peer A";
+    auto update_layout = [&]() {
+        std::vector<std::pair<std::string, std::string>> contact_list;
+        for (size_t i = 0; i < sessions.size(); ++i) {
+            std::string status = (static_cast<int>(i) == active_session_index) ? "CONNECTED" : "IDLE";
+            contact_list.push_back({sessions[i]->alias, status});
+        }
 
-    std::vector<std::pair<std::string, std::string>> contact_list = {
-        {active_peer_alias, "CONNECTED"}
+        if (active_session_index >= 0 && active_session_index < static_cast<int>(sessions.size())) {
+            auto s = sessions[static_cast<size_t>(active_session_index)];
+            tui.render_chat_layout(s->alias, true, contact_list, s->chat_history);
+        } else {
+            std::vector<wire::ui::ChatBubble> empty_history;
+            std::vector<std::pair<std::string, std::string>> empty_contacts = {
+                {"No Connected Peers", "USE /add"}
+            };
+            tui.render_chat_layout("No Connected Peers (Use /add)", false, empty_contacts, empty_history);
+        }
     };
 
-    std::vector<wire::ui::ChatBubble> chat_history;
-
-    tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+    update_layout();
 
     std::atomic<bool> running{true};
 
-    // Background socket listener thread for receiving real incoming P2P messages
+    // ── 3. Background Socket Listener ───────────────────────────────────────
     std::thread listener_thread([&]() {
         while (running) {
             auto packet_opt = socket.receive_packet();
             if (packet_opt.has_value()) {
                 const auto& pkt = packet_opt.value();
-
                 constexpr size_t hdr_size = sizeof(wire::crypto::RatchetHeader);
+
                 if (pkt.data.size() > hdr_size + 16) {
                     wire::crypto::RatchetHeader hdr{};
                     std::memcpy(&hdr, pkt.data.data(), hdr_size);
@@ -164,16 +196,22 @@ int main() {
                     const uint8_t* ciphertext_ptr = pkt.data.data() + hdr_size;
                     size_t ciphertext_len = pkt.data.size() - hdr_size;
 
-                    // Decrypt incoming ciphertext payload using received RatchetHeader
-                    auto decrypted = ratchet.decrypt(hdr, ciphertext_ptr, ciphertext_len);
+                    std::lock_guard<std::mutex> lock(session_mutex);
+                    for (size_t i = 0; i < sessions.size(); ++i) {
+                        auto& s = sessions[i];
+                        auto decrypted = s->ratchet.decrypt(hdr, ciphertext_ptr, ciphertext_len);
 
-                    if (decrypted.has_value()) {
-                        std::string plain_msg(decrypted->begin(), decrypted->end());
-                        ledger.append_message(pkt.data.data(), pkt.data.size(), 1700000000);
+                        if (decrypted.has_value()) {
+                            std::string plain_msg(decrypted->begin(), decrypted->end());
+                            ledger.append_message(pkt.data.data(), pkt.data.size(), 1700000000);
 
-                        // Add incoming green speech bubble
-                        chat_history.push_back({ active_peer_alias, plain_msg, "19:20", false });
-                        tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+                            s->chat_history.push_back({ s->alias, plain_msg, "19:20", false });
+
+                            if (static_cast<int>(i) == active_session_index) {
+                                update_layout();
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -181,25 +219,24 @@ int main() {
         }
     });
 
-    // Keyboard input loop for outgoing messages
-    std::string user_input;
-
+    // ── 4. Keyboard Command & Message Loop ───────────────────────────────────
     auto print_help = [&]() {
         std::cout << "\n  ╔══════════════════════════════════════════════════╗\n";
         std::cout << "  ║         PROJECT WIRE — AVAILABLE COMMANDS        ║\n";
         std::cout << "  ╠══════════════════════════════════════════════════╣\n";
-        std::cout << "  ║  /myid             Show your identity hash        ║\n";
-        std::cout << "  ║  /add              Add a new peer                 ║\n";
-        std::cout << "  ║  /peers            List all connected peers        ║\n";
-        std::cout << "  ║  /switch <alias>   Switch active chat target       ║\n";
-        std::cout << "  ║  /update           Check & install latest update   ║\n";
-        std::cout << "  ║  /quit             Exit Wire                       ║\n";
-        std::cout << "  ║  <message>         Send message to active peer     ║\n";
+        std::cout << "  ║  /myid             Show your identity & port     ║\n";
+        std::cout << "  ║  /add              Add a new peer with secret    ║\n";
+        std::cout << "  ║  /peers            List all connected peers      ║\n";
+        std::cout << "  ║  /switch <alias>   Switch active chat target     ║\n";
+        std::cout << "  ║  /update           Check & install latest update ║\n";
+        std::cout << "  ║  /quit             Exit Wire                     ║\n";
+        std::cout << "  ║  <message>         Send message to active peer   ║\n";
         std::cout << "  ╚══════════════════════════════════════════════════╝\n\n";
     };
 
     print_help();
 
+    std::string user_input;
     while (std::getline(std::cin, user_input)) {
 
         // ── /quit ────────────────────────────────────────────────────────
@@ -219,25 +256,30 @@ int main() {
             std::cout << "\n  ╔══════════════════════════════════════════════════════════════════╗\n";
             std::cout << "  ║                  YOUR WIRE IDENTITY                              ║\n";
             std::cout << "  ╠══════════════════════════════════════════════════════════════════╣\n";
-            std::cout << "  ║  Hash:  " << my_identity_hex << "  ║\n";
-            std::cout << "  ║  Port:  " << local_port
-                      << "  (share your IP + this port with peers)              ║\n";
+            std::cout << "  ║  Nickname: " << my_nickname << "\n";
+            std::cout << "  ║  Hash:     " << my_identity_hex << "  ║\n";
+            std::cout << "  ║  Port:     " << local_port << "\n";
             std::cout << "  ╠══════════════════════════════════════════════════════════════════╣\n";
-            std::cout << "  ║  Send this to your peer so they can /add you:                    ║\n";
-            std::cout << "  ║    Alias = anything   IP:Port = <your-ip>:" << local_port << "              ║\n";
+            std::cout << "  ║  Share your IP + Port + Shared Secret with your peer to /add.    ║\n";
             std::cout << "  ╚══════════════════════════════════════════════════════════════════╝\n\n";
             continue;
         }
 
         // ── /peers ───────────────────────────────────────────────────────
         if (user_input == "/peers") {
-            std::cout << "\n  Connected peers:\n";
-            for (size_t i = 0; i < contact_list.size(); ++i) {
-                std::string marker = (contact_list[i].first == active_peer_alias) ? " ◀ active" : "";
-                std::cout << "    [" << i + 1 << "] " << contact_list[i].first
-                          << "  (" << contact_list[i].second << ")" << marker << "\n";
+            std::lock_guard<std::mutex> lock(session_mutex);
+            if (sessions.empty()) {
+                std::cout << "\n  No connected peers. Use /add to connect to a peer.\n\n";
+            } else {
+                std::cout << "\n  Connected peers:\n";
+                for (size_t i = 0; i < sessions.size(); ++i) {
+                    std::string marker = (static_cast<int>(i) == active_session_index) ? " ◀ active" : "";
+                    std::cout << "    [" << i + 1 << "] " << sessions[i]->alias
+                              << "  (" << sessions[i]->target_ip << ":" << sessions[i]->target_port << ")"
+                              << marker << "\n";
+                }
+                std::cout << "\n";
             }
-            std::cout << "\n";
             continue;
         }
 
@@ -250,27 +292,46 @@ int main() {
 
         // ── /add ─────────────────────────────────────────────────────────
         if (user_input == "/add") {
-            std::string alias, ip_port;
+            std::string alias, ip_port, passphrase, role_choice;
 
-            std::cout << "\n  Add New Peer\n";
+            std::cout << "\n  Add New Peer Setup\n";
             std::cout << "  ─────────────────────────────\n";
-            std::cout << "  Alias (display name): ";
+            std::cout << "  Peer Nickname (display name): ";
             std::cout << std::flush;
             if (!std::getline(std::cin, alias) || alias.empty()) {
                 std::cout << "  [!] Cancelled — alias cannot be empty.\n\n";
                 continue;
             }
 
-            std::cout << "  IP:Port (e.g. 127.0.0.1:9002): ";
+            std::cout << "  Target IP:Port (e.g. 192.168.1.5:9001): ";
             std::cout << std::flush;
             if (!std::getline(std::cin, ip_port) || ip_port.empty()) {
                 std::cout << "  [!] Cancelled — IP:Port cannot be empty.\n\n";
                 continue;
             }
 
-            // Parse IP and port from "ip:port" format
+            std::cout << "  Shared Passphrase / Secret Key (must match peer's key): ";
+            std::cout << std::flush;
+            if (!std::getline(std::cin, passphrase) || passphrase.empty()) {
+                std::cout << "  [!] Cancelled — secret key cannot be empty.\n\n";
+                continue;
+            }
+
+            std::cout << "  Your Role for this connection:\n";
+            std::cout << "    [1] Initiator (Alice)\n";
+            std::cout << "    [2] Responder (Bob)\n";
+            std::cout << "  Select Choice [1-2] (default: 1): ";
+            std::cout << std::flush;
+            bool is_alice = true;
+            if (std::getline(std::cin, role_choice)) {
+                if (role_choice == "2" || role_choice == "B" || role_choice == "b" || role_choice == "Bob" || role_choice == "bob") {
+                    is_alice = false;
+                }
+            }
+
+            // Parse IP and port
             std::string peer_ip = "127.0.0.1";
-            uint16_t peer_port = remote_port;
+            uint16_t peer_port = 9001;
 
             auto colon = ip_port.find(':');
             if (colon != std::string::npos) {
@@ -278,34 +339,29 @@ int main() {
                 try {
                     peer_port = static_cast<uint16_t>(std::stoi(ip_port.substr(colon + 1)));
                 } catch (...) {
-                    std::cout << "  [!] Invalid port — using default " << remote_port << "\n";
-                    peer_port = remote_port;
+                    std::cout << "  [!] Invalid port — using default 9001\n";
                 }
             } else {
-                // Just an IP with no port
                 peer_ip = ip_port;
             }
 
-            // Add to contact list sidebar
-            contact_list.push_back({alias, "CONNECTED"});
+            wire::crypto::Key256 derived_key = derive_key_from_passphrase(passphrase);
 
-            // Switch active target to the newly added peer
-            active_peer_alias = alias;
-            remote_ip = peer_ip;
-            remote_port = peer_port;
-
-            // Reset chat history for the new peer session
-            chat_history.clear();
+            {
+                std::lock_guard<std::mutex> lock(session_mutex);
+                auto new_session = std::make_shared<PeerSession>(alias, peer_ip, peer_port, derived_key, is_alice);
+                sessions.push_back(new_session);
+                active_session_index = static_cast<int>(sessions.size()) - 1;
+            }
 
             std::cout << "  [✓] Peer \"" << alias << "\" added at " << peer_ip << ":" << peer_port << "\n\n";
-            tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+            update_layout();
             continue;
         }
 
         // ── /switch <alias> ───────────────────────────────────────────────
         if (user_input.rfind("/switch", 0) == 0) {
             std::string target = user_input.size() > 8 ? user_input.substr(8) : "";
-            // Trim leading spaces
             while (!target.empty() && target.front() == ' ') target.erase(target.begin());
 
             if (target.empty()) {
@@ -313,9 +369,11 @@ int main() {
                 continue;
             }
 
+            std::lock_guard<std::mutex> lock(session_mutex);
             bool found = false;
-            for (const auto& c : contact_list) {
-                if (c.first == target) {
+            for (size_t i = 0; i < sessions.size(); ++i) {
+                if (sessions[i]->alias == target) {
+                    active_session_index = static_cast<int>(i);
                     found = true;
                     break;
                 }
@@ -326,10 +384,8 @@ int main() {
                 continue;
             }
 
-            active_peer_alias = target;
-            chat_history.clear();
             std::cout << "  [✓] Switched active chat to \"" << target << "\"\n\n";
-            tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+            update_layout();
             continue;
         }
 
@@ -340,13 +396,21 @@ int main() {
         }
 
         // ── Send message ──────────────────────────────────────────────────
+        std::lock_guard<std::mutex> lock(session_mutex);
+        if (active_session_index < 0 || active_session_index >= static_cast<int>(sessions.size())) {
+            std::cout << "  [!] No peer connected. Use /add to connect to a peer first.\n\n";
+            continue;
+        }
+
+        auto active_session = sessions[static_cast<size_t>(active_session_index)];
+
         if (user_input.empty()) {
-            tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+            update_layout();
             continue;
         }
 
         // 1. Encrypt message with Double Ratchet
-        auto [hdr, ciphertext] = ratchet.encrypt(
+        auto [hdr, ciphertext] = active_session->ratchet.encrypt(
             reinterpret_cast<const uint8_t*>(user_input.data()), user_input.size());
 
         // Construct wire packet: RatchetHeader (40 bytes) + Ciphertext
@@ -357,14 +421,13 @@ int main() {
         // 2. Append to local Merkle-DAG ledger
         ledger.append_message(wire_packet.data(), wire_packet.size(), 1700000000);
 
-        // 3. Transmit real encrypted packet over UDP network socket
-        socket.send_packet(remote_ip, remote_port, wire_packet.data(), wire_packet.size());
-        // Backup transmit to localhost if running on same machine
-        socket.send_packet("127.0.0.1", remote_port, wire_packet.data(), wire_packet.size());
+        // 3. Transmit real encrypted packet over targeted UDP network socket (NO BROADCAST)
+        socket.send_packet(active_session->target_ip, active_session->target_port,
+                           wire_packet.data(), wire_packet.size());
 
-        // 4. Render outgoing cyan speech bubble
-        chat_history.push_back({ "YOU", user_input, "19:20", true });
-        tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+        // 4. Render outgoing speech bubble
+        active_session->chat_history.push_back({ "YOU", user_input, "19:20", true });
+        update_layout();
     }
 
     running = false;

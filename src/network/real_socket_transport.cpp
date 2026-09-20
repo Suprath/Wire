@@ -92,10 +92,6 @@ bool RealSocketTransport::send_packet(const std::string& target_ip, uint16_t tar
     if (!target_ip.empty()) {
         candidates.push_back(target_ip);
     }
-    if (target_ip != "127.0.0.1") {
-        candidates.push_back("127.0.0.1");
-        candidates.push_back("255.255.255.255");
-    }
 
     bool any_sent = false;
 
