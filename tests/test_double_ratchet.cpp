@@ -45,6 +45,17 @@ void test_double_ratchet_handshake_and_encryption() {
     assert(recovered_msg2 == secret_msg2);
     std::cout << "  [PASS] Bob -> Alice reply encryption & ratchet advancement verified." << std::endl;
 
+    // 5. Multi-message sequential test (Alice sends 5 messages in a row to Bob)
+    for (int i = 0; i < 5; ++i) {
+        std::string msg = "Sequential Alice Message #" + std::to_string(i + 1);
+        auto [hdr, cipher] = alice.encrypt(reinterpret_cast<const uint8_t*>(msg.data()), msg.size());
+        auto dec = bob.decrypt(hdr, cipher.data(), cipher.size());
+        assert(dec.has_value());
+        std::string rec(dec.value().begin(), dec.value().end());
+        assert(rec == msg);
+    }
+    std::cout << "  [PASS] Multi-message sequential ratchet advancement verified (5 messages)." << std::endl;
+
     std::cout << "[SUCCESS] Double Ratchet tests passed cleanly!\n" << std::endl;
 }
 

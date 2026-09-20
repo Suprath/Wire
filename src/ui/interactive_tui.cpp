@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 #include <chrono>
 
@@ -99,17 +100,25 @@ int main() {
             if (packet_opt.has_value()) {
                 const auto& pkt = packet_opt.value();
 
-                // Decrypt incoming ciphertext payload
-                wire::crypto::RatchetHeader dummy_hdr{};
-                auto decrypted = ratchet.decrypt(dummy_hdr, pkt.data.data(), pkt.data.size());
+                constexpr size_t hdr_size = sizeof(wire::crypto::RatchetHeader);
+                if (pkt.data.size() > hdr_size + 16) {
+                    wire::crypto::RatchetHeader hdr{};
+                    std::memcpy(&hdr, pkt.data.data(), hdr_size);
 
-                if (decrypted.has_value()) {
-                    std::string plain_msg(decrypted->begin(), decrypted->end());
-                    ledger.append_message(pkt.data.data(), pkt.data.size(), 1700000000);
+                    const uint8_t* ciphertext_ptr = pkt.data.data() + hdr_size;
+                    size_t ciphertext_len = pkt.data.size() - hdr_size;
 
-                    // Add incoming green speech bubble
-                    chat_history.push_back({ active_peer_alias, plain_msg, "19:20", false });
-                    tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+                    // Decrypt incoming ciphertext payload using received RatchetHeader
+                    auto decrypted = ratchet.decrypt(hdr, ciphertext_ptr, ciphertext_len);
+
+                    if (decrypted.has_value()) {
+                        std::string plain_msg(decrypted->begin(), decrypted->end());
+                        ledger.append_message(pkt.data.data(), pkt.data.size(), 1700000000);
+
+                        // Add incoming green speech bubble
+                        chat_history.push_back({ active_peer_alias, plain_msg, "19:20", false });
+                        tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+                    }
                 }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -133,13 +142,18 @@ int main() {
         auto [hdr, ciphertext] = ratchet.encrypt(
             reinterpret_cast<const uint8_t*>(user_input.data()), user_input.size());
 
+        // Construct wire packet: RatchetHeader (40 bytes) + Ciphertext
+        std::vector<uint8_t> wire_packet(sizeof(wire::crypto::RatchetHeader) + ciphertext.size());
+        std::memcpy(wire_packet.data(), &hdr, sizeof(hdr));
+        std::memcpy(wire_packet.data() + sizeof(hdr), ciphertext.data(), ciphertext.size());
+
         // 2. Append to local Merkle-DAG ledger
-        ledger.append_message(ciphertext.data(), ciphertext.size(), 1700000000);
+        ledger.append_message(wire_packet.data(), wire_packet.size(), 1700000000);
 
         // 3. Transmit real encrypted packet over UDP network socket
-        socket.send_packet(remote_ip, remote_port, ciphertext.data(), ciphertext.size());
+        socket.send_packet(remote_ip, remote_port, wire_packet.data(), wire_packet.size());
         // Backup transmit to localhost if running on same machine
-        socket.send_packet("127.0.0.1", remote_port, ciphertext.data(), ciphertext.size());
+        socket.send_packet("127.0.0.1", remote_port, wire_packet.data(), wire_packet.size());
 
         // 4. Render outgoing cyan speech bubble
         chat_history.push_back({ "YOU", user_input, "19:20", true });
