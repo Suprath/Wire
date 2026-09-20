@@ -63,6 +63,10 @@ add_library(wire_ui STATIC
     src/ui/terminal_ui.cpp
 )
 
+# Main Terminal UI Client Executable
+add_executable(wire_tui src/ui/main_tui.cpp)
+target_link_libraries(wire_tui PRIVATE wire_ui wire_contact wire_genesis wire_crypto wire_network wire_ledger wire_update)
+
 # Protection Domains Executables (seL4 Microkit binaries)
 add_executable(wire_vault_pd src/pd/vault_pd.cpp)
 target_link_libraries(wire_vault_pd PRIVATE wire_crypto wire_network wire_ledger wire_contact)
