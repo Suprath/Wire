@@ -222,8 +222,13 @@ int main() {
 
                             s->chat_history.push_back({ s->alias, plain_msg, "19:20", false });
 
+                            if (active_session_index < 0) {
+                                active_session_index = static_cast<int>(i);
+                            }
+
                             if (static_cast<int>(i) == active_session_index) {
                                 update_layout();
+                                std::cout << "\a" << std::flush;
                             }
                             decrypted_any = true;
                             break;
@@ -455,13 +460,18 @@ int main() {
         // 2. Append to local Merkle-DAG ledger
         ledger.append_message(wire_packet.data(), wire_packet.size(), 1700000000);
 
-        // 3. Transmit real encrypted packet over targeted UDP network socket (NO BROADCAST)
-        socket.send_packet(active_session->target_ip, active_session->target_port,
-                           wire_packet.data(), wire_packet.size());
+        // 3. Transmit real encrypted packet over targeted UDP network socket
+        bool sent_ok = socket.send_packet(active_session->target_ip, active_session->target_port,
+                                           wire_packet.data(), wire_packet.size());
 
         // 4. Render outgoing speech bubble
         active_session->chat_history.push_back({ "YOU", user_input, "19:20", true });
         update_layout();
+
+        if (!sent_ok) {
+            std::cout << "\n  [!] Error: Could not send packet to " << active_session->target_ip << ":"
+                      << active_session->target_port << ". Check IP address format & connection!\n\n" << std::flush;
+        }
     }
 
     running = false;
