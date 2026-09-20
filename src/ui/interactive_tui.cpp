@@ -24,8 +24,63 @@
 #include <cstring>
 #include <thread>
 #include <chrono>
+#include <fstream>
+#include <filesystem>
+#include <random>
+#include <iomanip>
+#include <sstream>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 int main() {
+#if defined(_WIN32)
+    // Enable UTF-8 input and output — fixes box-drawing characters in Windows terminal
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    // Enable Virtual Terminal Processing for ANSI colours (Windows 10+)
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD dwMode = 0;
+    GetConsoleMode(hOut, &dwMode);
+    SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+#endif
+
+    // ── Load or generate persistent identity key ──────────────────────────────
+    // Stored at ~/.wire/identity.key  (or %APPDATA%\Wire\identity.key on Windows)
+    std::string data_dir = wire::update::UpdateManager::get_user_data_directory();
+    std::filesystem::path identity_path = std::filesystem::path(data_dir) / "identity.key";
+    std::filesystem::create_directories(data_dir);
+
+    wire::crypto::Key256 my_identity{};
+
+    // Try to load existing identity
+    std::ifstream idf(identity_path, std::ios::binary);
+    if (idf.is_open() && idf.read(reinterpret_cast<char*>(my_identity.data()), 32).gcount() == 32) {
+        idf.close();
+    } else {
+        // Generate a new random 32-byte identity
+        std::random_device rd;
+        std::mt19937_64 rng(rd());
+        std::uniform_int_distribution<uint8_t> dist(0, 255);
+        for (auto& b : my_identity) b = dist(rng);
+
+        // Save it for future launches
+        std::ofstream odf(identity_path, std::ios::binary);
+        if (odf.is_open()) {
+            odf.write(reinterpret_cast<const char*>(my_identity.data()), 32);
+        }
+    }
+
+    // Build hex string of identity for /myid display
+    std::ostringstream hex_ss;
+    hex_ss << std::hex << std::setfill('0');
+    for (size_t i = 0; i < my_identity.size(); ++i) {
+        hex_ss << std::setw(2) << static_cast<unsigned>(my_identity[i]);
+        if (i == 15) hex_ss << "\n                        "; // split into two lines for readability
+    }
+    std::string my_identity_hex = hex_ss.str();
+
     wire::ui::iMessageTUI tui;
     wire::contact::ContactManager contacts;
     wire::network::RealSocketTransport socket;
@@ -133,12 +188,13 @@ int main() {
         std::cout << "\n  ╔══════════════════════════════════════════════════╗\n";
         std::cout << "  ║         PROJECT WIRE — AVAILABLE COMMANDS        ║\n";
         std::cout << "  ╠══════════════════════════════════════════════════╣\n";
-        std::cout << "  ║  /add              Add a new peer                ║\n";
-        std::cout << "  ║  /peers            List all connected peers       ║\n";
-        std::cout << "  ║  /switch <alias>   Switch active chat target      ║\n";
-        std::cout << "  ║  /update           Check & install latest update  ║\n";
-        std::cout << "  ║  /quit             Exit Wire                      ║\n";
-        std::cout << "  ║  <message>         Send message to active peer    ║\n";
+        std::cout << "  ║  /myid             Show your identity hash        ║\n";
+        std::cout << "  ║  /add              Add a new peer                 ║\n";
+        std::cout << "  ║  /peers            List all connected peers        ║\n";
+        std::cout << "  ║  /switch <alias>   Switch active chat target       ║\n";
+        std::cout << "  ║  /update           Check & install latest update   ║\n";
+        std::cout << "  ║  /quit             Exit Wire                       ║\n";
+        std::cout << "  ║  <message>         Send message to active peer     ║\n";
         std::cout << "  ╚══════════════════════════════════════════════════╝\n\n";
     };
 
@@ -155,6 +211,21 @@ int main() {
         // ── /help ────────────────────────────────────────────────────────
         if (user_input == "/help" || user_input == "/?") {
             print_help();
+            continue;
+        }
+
+        // ── /myid ────────────────────────────────────────────────────────
+        if (user_input == "/myid") {
+            std::cout << "\n  ╔══════════════════════════════════════════════════════════════════╗\n";
+            std::cout << "  ║                  YOUR WIRE IDENTITY                              ║\n";
+            std::cout << "  ╠══════════════════════════════════════════════════════════════════╣\n";
+            std::cout << "  ║  Hash:  " << my_identity_hex << "  ║\n";
+            std::cout << "  ║  Port:  " << local_port
+                      << "  (share your IP + this port with peers)              ║\n";
+            std::cout << "  ╠══════════════════════════════════════════════════════════════════╣\n";
+            std::cout << "  ║  Send this to your peer so they can /add you:                    ║\n";
+            std::cout << "  ║    Alias = anything   IP:Port = <your-ip>:" << local_port << "              ║\n";
+            std::cout << "  ╚══════════════════════════════════════════════════════════════════╝\n\n";
             continue;
         }
 
