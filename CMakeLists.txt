@@ -111,3 +111,7 @@ add_test(NAME VirtioSerialBridgeTest COMMAND test_virtio_serial_bridge)
 add_executable(test_terminal_ui tests/test_terminal_ui.cpp)
 target_link_libraries(test_terminal_ui PRIVATE wire_ui wire_network)
 add_test(NAME TerminalUITest COMMAND test_terminal_ui)
+
+add_executable(test_utf8_special_chars tests/test_utf8_special_chars.cpp)
+target_link_libraries(test_utf8_special_chars PRIVATE wire_crypto wire_network wire_ledger wire_ui)
+add_test(NAME UTF8SpecialCharsTest COMMAND test_utf8_special_chars)
