@@ -158,10 +158,37 @@ UpdateCheckResult UpdateManager::check_github_updates(const std::string& github_
     result.latest_version   = CURRENT_APP_VERSION;
     result.release_url      = "https://github.com/" + github_repo + "/releases/latest";
 
-    // Hit GitHub Releases API via curl (available on macOS, Linux; install on Windows via winget)
     std::string api_url = "https://api.github.com/repos/" + github_repo + "/releases/latest";
-    std::string cmd = "curl -fsSL --max-time 8 -H \"Accept: application/vnd.github+json\" \"" + api_url + "\" 2>/dev/null";
 
+#if defined(_WIN32)
+    // Use PowerShell Invoke-RestMethod on Windows (built-in on all Windows 10/11)
+    std::string cmd = "powershell -Command \"try { (Invoke-RestMethod -Uri '" + api_url + "' -Headers @{'User-Agent'='Wire'}).tag_name } catch {}\"";
+    std::string latest_tag = run_command_capture(cmd);
+    while (!latest_tag.empty() && (latest_tag.back() == '\r' || latest_tag.back() == '\n' || latest_tag.back() == ' ')) {
+        latest_tag.pop_back();
+    }
+
+    if (latest_tag.empty()) {
+        // Fallback: try curl with 2>NUL
+        std::string curl_cmd = "curl -fsSL --max-time 8 -H \"Accept: application/vnd.github+json\" \"" + api_url + "\" 2>NUL";
+        std::string json = run_command_capture(curl_cmd);
+        latest_tag = extract_json_string(json, "tag_name");
+    }
+
+    if (latest_tag.empty()) {
+        std::printf("[UpdateManager] Could not reach GitHub API.\n");
+        return result;
+    }
+
+    result.latest_version = latest_tag;
+    result.release_url = "https://github.com/" + github_repo + "/releases/tag/" + latest_tag;
+    result.update_available = (latest_tag != std::string(CURRENT_APP_VERSION));
+
+    std::printf("[UpdateManager] Current: %s  |  Latest: %s\n",
+                CURRENT_APP_VERSION, latest_tag.c_str());
+    return result;
+#else
+    std::string cmd = "curl -fsSL --max-time 8 -H \"Accept: application/vnd.github+json\" \"" + api_url + "\" 2>/dev/null";
     std::string json = run_command_capture(cmd);
     if (json.empty()) {
         std::printf("[UpdateManager] Could not reach GitHub API (no network or curl not installed).\n");
@@ -184,6 +211,7 @@ UpdateCheckResult UpdateManager::check_github_updates(const std::string& github_
                 CURRENT_APP_VERSION, latest_tag.c_str());
 
     return result;
+#endif
 }
 
 bool UpdateManager::download_and_apply_update(const std::string& github_repo) noexcept {
@@ -201,22 +229,25 @@ bool UpdateManager::download_and_apply_update(const std::string& github_repo) no
 
     std::string asset = platform_asset_name();
 
-    // Direct asset download URL: github.com/<owner>/<repo>/releases/download/<tag>/<asset>
     std::string download_url = "https://github.com/" + github_repo +
                                "/releases/download/" + check.latest_version + "/" + asset;
 
-    // Download into system temp directory
     std::filesystem::path tmp_dir = std::filesystem::temp_directory_path();
     std::filesystem::path asset_path = tmp_dir / asset;
 
+#if defined(_WIN32)
+    std::string dl_cmd = "powershell -Command \"Invoke-WebRequest -Uri '" + download_url +
+                         "' -OutFile '" + asset_path.string() + "' -UseBasicParsing\"";
+#else
     std::string dl_cmd = "curl -fL --progress-bar --max-time 120 -o \"" +
                          asset_path.string() + "\" \"" + download_url + "\"";
+#endif
 
     std::printf("[Updater] Downloading: %s\n", download_url.c_str());
     int dl_ret = std::system(dl_cmd.c_str());
 
     if (dl_ret != 0 || !std::filesystem::exists(asset_path)) {
-        std::printf("[Updater] Download failed. Check your network or install curl.\n");
+        std::printf("[Updater] Download failed. Check your network.\n");
         std::printf("[Updater] Manual download: %s\n", check.release_url.c_str());
         return false;
     }
