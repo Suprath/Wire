@@ -33,6 +33,11 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if(WIN32)
     link_libraries(ws2_32)
+    # Statically link MinGW runtime — produces a self-contained .exe
+    # with no libgcc_s_seh-1.dll / libstdc++-6.dll / libwinpthread-1.dll dependencies.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        add_link_options(-static -static-libgcc -static-libstdc++)
+    endif()
 endif()
 
 # Core Libraries
