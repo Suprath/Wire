@@ -35,32 +35,23 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # GitHub-hosted runners ship with CMake 3.25+, no extra setup needed.
-      - name: Verify CMake Version
-        run: cmake --version
+      # GitHub-hosted runners ship with CMake 3.25+ and Ninja pre-installed.
+      # Use Ninja on all platforms — avoids Visual Studio generator detection issues.
+      - name: Verify CMake + Ninja
+        run: |
+          cmake --version
+          ninja --version
 
-      - name: Configure CMake (Unix)
-        if: runner.os != 'Windows'
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
-
-      - name: Configure CMake (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -G Ninja
 
       - name: Build Executables
         run: cmake --build build --config Release --parallel
 
       # RealSocketTransportTest requires two live UDP peers — skip it in CI.
       # All other 16 suites run normally.
-      - name: Run CTest Suite (Unix)
-        if: runner.os != 'Windows'
-        run: ctest --test-dir build --output-on-failure -C Release --exclude-regex RealSocketTransportTest
-
-      - name: Run CTest Suite (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: ctest --test-dir build --output-on-failure -C Release --exclude-regex RealSocketTransportTest
+      - name: Run CTest Suite
+        run: ctest --test-dir build --output-on-failure --exclude-regex RealSocketTransportTest
 
       # ── Packaging ─────────────────────────────────────────────────────────
 
@@ -69,11 +60,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force
-          # MSVC puts binaries under build/Release/, MinGW puts them under build/
-          $binPath = if (Test-Path "build/Release/wire_tui.exe") { "build/Release" } else { "build" }
-          Copy-Item "$binPath/wire_tui.exe" dist/
-          Copy-Item "$binPath/wire_tui_interactive.exe" dist/
-          Write-Host "Packaged from: $binPath"
+          Copy-Item build/wire_tui.exe dist/
+          Copy-Item build/wire_tui_interactive.exe dist/
           Compress-Archive -Path dist/* -DestinationPath wire-windows-x64.zip
 
       - name: Package Linux Binary Artifacts
