@@ -47,10 +47,23 @@ struct UpdateCheckResult {
 class UpdateManager {
 public:
     /**
-     * @brief Resolves the cross-platform user data directory path (~/.wire/data/).
+     * @brief Resolves the cross-platform user data directory path (~/.wire/data/ or Portable USB path).
      * @return std::string Absolute path to persistent user vault directory.
      */
     [[nodiscard]] static std::string get_user_data_directory() noexcept;
+
+    /**
+     * @brief Enables Portable USB / Live OS mode, directing data storage to the USB drive path.
+     * @param enable true to enable portable mode.
+     * @param custom_path Optional custom USB directory path (e.g. "/media/usb/wire_data" or "./wire_data").
+     */
+    static void set_portable_mode(bool enable, const std::string& custom_path = "") noexcept;
+
+    /**
+     * @brief Checks if Portable USB mode is active.
+     * @return bool true if in Portable USB mode.
+     */
+    [[nodiscard]] static bool is_portable_mode() noexcept;
 
     /**
      * @brief Checks if the user data vault requires schema migration to match current app version.

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ProjectWire VERSION 1.1.0 LANGUAGES CXX C)
+project(ProjectWire VERSION 1.2.0 LANGUAGES CXX C)
 
 # Set C++20 Standard with strict memory safety & compiler warning flags
 set(CMAKE_CXX_STANDARD 20)
@@ -131,3 +131,7 @@ add_test(NAME ContactManagerTest COMMAND test_contact_manager)
 add_executable(test_update_manager tests/test_update_manager.cpp)
 target_link_libraries(test_update_manager PRIVATE wire_update)
 add_test(NAME UpdateManagerTest COMMAND test_update_manager)
+
+add_executable(test_portable_usb_mode tests/test_portable_usb_mode.cpp)
+target_link_libraries(test_portable_usb_mode PRIVATE wire_update)
+add_test(NAME PortableUSBModeTest COMMAND test_portable_usb_mode)

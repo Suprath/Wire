@@ -13,7 +13,27 @@
 
 namespace wire::update {
 
+static bool s_portable_mode = false;
+static std::string s_portable_path = "";
+
+void UpdateManager::set_portable_mode(bool enable, const std::string& custom_path) noexcept {
+    s_portable_mode = enable;
+    if (!custom_path.empty()) {
+        s_portable_path = custom_path;
+    } else {
+        s_portable_path = "./wire_data";
+    }
+}
+
+bool UpdateManager::is_portable_mode() noexcept {
+    return s_portable_mode;
+}
+
 std::string UpdateManager::get_user_data_directory() noexcept {
+    if (s_portable_mode) {
+        return s_portable_path;
+    }
+
 #if defined(_WIN32)
     const char* appdata = std::getenv("APPDATA");
     if (appdata) {
