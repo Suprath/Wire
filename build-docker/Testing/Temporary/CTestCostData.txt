@@ -1,0 +1,3 @@
+ChaCha20PRNGTest 1 0.00112258
+PRNGSecurityAndPerfTest 1 0.00465496
+---

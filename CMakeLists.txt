@@ -50,3 +50,7 @@ enable_testing()
 add_executable(test_chacha20_prng tests/test_chacha20_prng.cpp)
 target_link_libraries(test_chacha20_prng PRIVATE wire_crypto)
 add_test(NAME ChaCha20PRNGTest COMMAND test_chacha20_prng)
+
+add_executable(test_prng_security_and_perf tests/test_prng_security_and_perf.cpp)
+target_link_libraries(test_prng_security_and_perf PRIVATE wire_crypto)
+add_test(NAME PRNGSecurityAndPerfTest COMMAND test_prng_security_and_perf)
