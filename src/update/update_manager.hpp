@@ -28,7 +28,7 @@
 namespace wire::update {
 
 static constexpr uint32_t CURRENT_VAULT_SCHEMA_VERSION = 1;
-static constexpr const char* CURRENT_APP_VERSION = "v1.0.0";
+static constexpr const char* CURRENT_APP_VERSION = "v1.3.1";
 
 /**
  * @struct UpdateCheckResult
@@ -85,6 +85,14 @@ public:
      * @return UpdateCheckResult Result containing update status and download link.
      */
     [[nodiscard]] static UpdateCheckResult check_github_updates(const std::string& github_repo = "Suprath/Wire") noexcept;
+
+    /**
+     * @brief Checks GitHub Releases for a newer version, downloads it, and replaces the
+     *        current binary in-place (macOS/Linux) or prints install steps (Windows).
+     * @param github_repo GitHub repository path (default "Suprath/Wire").
+     * @return bool true if update was downloaded successfully, false if already up to date or error.
+     */
+    [[nodiscard]] static bool download_and_apply_update(const std::string& github_repo = "Suprath/Wire") noexcept;
 };
 
 } // namespace wire::update

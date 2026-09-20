@@ -15,6 +15,7 @@
 #include "../crypto/double_ratchet.hpp"
 #include "../ledger/merkle_dag.hpp"
 #include "../network/real_socket_transport.hpp"
+#include "../update/update_manager.hpp"
 
 #include <iostream>
 #include <string>
@@ -135,6 +136,7 @@ int main() {
         std::cout << "  ║  /add              Add a new peer                ║\n";
         std::cout << "  ║  /peers            List all connected peers       ║\n";
         std::cout << "  ║  /switch <alias>   Switch active chat target      ║\n";
+        std::cout << "  ║  /update           Check & install latest update  ║\n";
         std::cout << "  ║  /quit             Exit Wire                      ║\n";
         std::cout << "  ║  <message>         Send message to active peer    ║\n";
         std::cout << "  ╚══════════════════════════════════════════════════╝\n\n";
@@ -165,6 +167,13 @@ int main() {
                           << "  (" << contact_list[i].second << ")" << marker << "\n";
             }
             std::cout << "\n";
+            continue;
+        }
+
+        // ── /update ──────────────────────────────────────────────────────
+        if (user_input == "/update") {
+            std::cout << "\n  Checking for updates...\n";
+            static_cast<void>(wire::update::UpdateManager::download_and_apply_update());
             continue;
         }
 
