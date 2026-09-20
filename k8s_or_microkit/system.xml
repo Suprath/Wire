@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 
+  Project Wire — Microkit Protection Domain Topology Manifest (system.xml)
+  Target: QEMU ARM64 (aarch64) virt platform
+  
+  Security Model:
+  1. Vault_PD (Priority 200): Trusted Root Domain holding Master Seed, Noise/Double Ratchet keys.
+  2. Network_PD (Priority 100): Untrusted Domain handling raw network sockets, TLS/UDP probing.
+  3. Monitor_PD (Priority 150): System logging and Host virtio-serial bridge handler.
+  
+  Zero-Copy IPC:
+  - Memory Region 'net_vault_ring': Shared memory ring buffer between Network_PD and Vault_PD.
+  - Memory Region 'vault_mon_ring': Shared memory ring buffer between Vault_PD and Monitor_PD.
+-->
+<system>
+    <!-- 1. Protection Domains -->
+    <protection_domain name="vault_pd" priority="200">
+        <program_image path="vault_pd.elf" />
+    </protection_domain>
+
+    <protection_domain name="network_pd" priority="100">
+        <program_image path="network_pd.elf" />
+    </protection_domain>
+
+    <protection_domain name="monitor_pd" priority="150">
+        <program_image path="monitor_pd.elf" />
+    </protection_domain>
+
+    <!-- 2. Shared Memory Regions for sDDF Zero-Copy Ring Buffers -->
+    <!-- Shared ring buffer for raw encrypted network frames (64KB) -->
+    <memory_region name="net_vault_ring" size="0x10000" page_size="0x1000" />
+    
+    <!-- Shared ring buffer for console/serial message passing (16KB) -->
+    <memory_region name="vault_mon_ring" size="0x4000" page_size="0x1000" />
+
+    <!-- 3. Protection Domain Shared Memory Mappings -->
+    <protection_domain name="network_pd">
+        <map mr="net_vault_ring" vaddr="0x10000000" perms="rw" cached="true" />
+    </protection_domain>
+
+    <protection_domain name="vault_pd">
+        <map mr="net_vault_ring" vaddr="0x10000000" perms="rw" cached="true" />
+        <map mr="vault_mon_ring" vaddr="0x20000000" perms="rw" cached="true" />
+    </protection_domain>
+
+    <protection_domain name="monitor_pd">
+        <map mr="vault_mon_ring" vaddr="0x20000000" perms="rw" cached="true" />
+    </protection_domain>
+
+    <!-- 4. Microkit Asynchronous IPC Channels -->
+    <!-- Channel 1: Vault_PD <-> Network_PD -->
+    <channel id="1">
+        <end pd="vault_pd" id="1" />
+        <end pd="network_pd" id="1" />
+    </channel>
+
+    <channel id="2">
+        <end pd="vault_pd" id="2" />
+        <end pd="monitor_pd" id="1" />
+    </channel>
+</system>

@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  wire-builder:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: wire-sel4-builder:latest
+    container_name: wire_sel4_builder
+    volumes:
+      - .:/workspace
+    environment:
+      - CC=clang-18
+      - CXX=clang++-18
+    stdin_open: true
+    tty: true
