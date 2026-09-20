@@ -49,6 +49,60 @@ struct PeerSession {
         : alias(name), target_ip(ip), target_port(port), ratchet(root_key, is_alice) {}
 };
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <unistd.h>
+#endif
+
+/** Automatically resolves the machine's primary local IPv4 address */
+static std::string get_primary_local_ip() {
+    int sock = static_cast<int>(socket(AF_INET, SOCK_DGRAM, 0));
+    if (sock < 0) return "127.0.0.1";
+
+    sockaddr_in loopback{};
+    loopback.sin_family = AF_INET;
+    loopback.sin_port = htons(53);
+    inet_pton(AF_INET, "8.8.8.8", &loopback.sin_addr);
+
+    if (connect(sock, reinterpret_cast<sockaddr*>(&loopback), sizeof(loopback)) < 0) {
+#if defined(_WIN32)
+        closesocket(sock);
+#else
+        close(sock);
+#endif
+        return "127.0.0.1";
+    }
+
+    sockaddr_in name{};
+    socklen_t namelen = sizeof(name);
+    if (getsockname(sock, reinterpret_cast<sockaddr*>(&name), &namelen) < 0) {
+#if defined(_WIN32)
+        closesocket(sock);
+#else
+        close(sock);
+#endif
+        return "127.0.0.1";
+    }
+
+    char buffer[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &name.sin_addr, buffer, INET_ADDRSTRLEN);
+
+#if defined(_WIN32)
+    closesocket(sock);
+#else
+    close(sock);
+#endif
+
+    return std::string(buffer);
+}
+
 /** Trim trailing carriage returns (\r), newlines (\n), and whitespace from inputs */
 static void trim_input(std::string& s) {
     while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ' || s.back() == '\t')) {
@@ -285,14 +339,15 @@ int main() {
 
         // ── /myid ────────────────────────────────────────────────────────
         if (user_input == "/myid") {
+            std::string my_ip = get_primary_local_ip();
             std::cout << "\n  ╔═════════════════════════════════════════════════════════════════════════════════╗\n";
-            std::cout << "  ║                           YOUR WIRE IDENTITY                                    ║\n";
+            std::cout << "  ║                  YOUR WIRE IDENTITY & NETWORK ADDRESS                           ║\n";
             std::cout << "  ╠═════════════════════════════════════════════════════════════════════════════════╣\n";
             std::cout << "  ║  Nickname: " << my_nickname << "\n";
             std::cout << "  ║  Hash:     " << my_identity_hex << "\n";
-            std::cout << "  ║  Port:     " << local_port << "\n";
+            std::cout << "  ║  IP:Port:  " << my_ip << ":" << local_port << "\n";
             std::cout << "  ╠═════════════════════════════════════════════════════════════════════════════════╣\n";
-            std::cout << "  ║  Share your IP + Port + Shared Secret with your peer to /add.                   ║\n";
+            std::cout << "  ║  Share your full IP:Port (" << my_ip << ":" << local_port << ") + Shared Secret to /add.   ║\n";
             std::cout << "  ╚═════════════════════════════════════════════════════════════════════════════════╝\n\n";
             continue;
         }
