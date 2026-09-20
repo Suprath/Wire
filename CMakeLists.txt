@@ -1,5 +1,24 @@
 cmake_minimum_required(VERSION 3.20)
-project(ProjectWire VERSION 1.3.0 LANGUAGES CXX C)
+project(ProjectWire VERSION 1.4.0 LANGUAGES CXX C)
+
+# ── Version from git tag ──────────────────────────────────────────────────────
+# Automatically bakes the current git tag into the binary at compile time.
+# CI builds tagged v1.4.0 will produce a binary that reports "v1.4.0".
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE WIRE_GIT_TAG
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+endif()
+if(NOT WIRE_GIT_TAG OR WIRE_GIT_TAG STREQUAL "")
+    set(WIRE_GIT_TAG "v0.0.0-dev")
+endif()
+message(STATUS "Wire version: ${WIRE_GIT_TAG}")
+add_compile_definitions(WIRE_APP_VERSION="${WIRE_GIT_TAG}")
 
 # Set C++20 Standard with strict memory safety & compiler warning flags
 set(CMAKE_CXX_STANDARD 20)

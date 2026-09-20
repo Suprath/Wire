@@ -28,7 +28,10 @@
 namespace wire::update {
 
 static constexpr uint32_t CURRENT_VAULT_SCHEMA_VERSION = 1;
-static constexpr const char* CURRENT_APP_VERSION = "v1.3.1";
+#ifndef WIRE_APP_VERSION
+#define WIRE_APP_VERSION "v1.4.0"
+#endif
+static constexpr const char* CURRENT_APP_VERSION = WIRE_APP_VERSION;
 
 /**
  * @struct UpdateCheckResult
