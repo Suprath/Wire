@@ -41,6 +41,7 @@ add_library(wire_crypto STATIC
 add_library(wire_network STATIC
     src/network/tls_mimicry.cpp
     src/network/discovery_engine.cpp
+    src/network/real_socket_transport.cpp
 )
 
 add_library(wire_ledger STATIC
@@ -148,3 +149,8 @@ add_test(NAME PortableUSBModeTest COMMAND test_portable_usb_mode)
 add_executable(test_imessage_tui tests/test_imessage_tui.cpp)
 target_link_libraries(test_imessage_tui PRIVATE wire_ui)
 add_test(NAME iMessageTUITest COMMAND test_imessage_tui)
+
+add_executable(test_real_socket_transport tests/test_real_socket_transport.cpp)
+target_link_libraries(test_real_socket_transport PRIVATE wire_network)
+add_test(NAME RealSocketTransportTest COMMAND test_real_socket_transport)
+

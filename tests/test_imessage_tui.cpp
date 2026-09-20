@@ -24,7 +24,7 @@ void test_imessage_tui_render() {
         {"BOB", "ACK: Ghost Bridge Online! 🚀", "19:06", false}
     };
 
-    tui.render_layout("Bob", true, contacts, history);
+    tui.render_chat_layout("Bob", true, contacts, history);
 
     std::cout << "\n  [PASS] Minimal iMessage-style speech bubble TUI layout rendered cleanly." << std::endl;
     std::cout << "[SUCCESS] iMessage TUI layout tests passed!\n" << std::endl;

@@ -118,7 +118,7 @@ void iMessageTUI::render_chat_layout(
     }
 
     std::cout << "├──────────────────────┴───────────────────────────────────────────────────────┤\n";
-    std::cout << "│ 🔒 Message #" << active_peer << " (type /menu to return, /add to add peer): ";
+    std::cout << "│ 🔒 Message #" << active_peer << " (type /menu to return, /add to add peer): " << std::flush;
 }
 
 } // namespace wire::ui

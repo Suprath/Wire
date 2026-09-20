@@ -1,7 +1,12 @@
 /**
  * @file interactive_tui.cpp
- * @brief Fully Functioning Interactive UI/UX Terminal Client for Project Wire
+ * @brief Real P2P Socket Inter-Container Terminal UI Application for Project Wire
  * @project Project Wire
+ * 
+ * @details
+ * Connects Peer A and Peer B via real UDP network sockets across Docker containers or host processes.
+ * - Outgoing typed messages are encrypted with Double Ratchet and transmitted over real sockets.
+ * - Incoming real UDP packets are received, authenticated, decrypted, and displayed live in the chat stream.
  */
 
 #include "imessage_tui.hpp"
@@ -9,137 +14,125 @@
 #include "../contact/contact_manager.hpp"
 #include "../crypto/double_ratchet.hpp"
 #include "../ledger/merkle_dag.hpp"
+#include "../network/real_socket_transport.hpp"
 
 #include <iostream>
 #include <string>
 #include <vector>
-#include <sstream>
+#include <cstdlib>
+#include <thread>
+#include <chrono>
 
 int main() {
     wire::ui::iMessageTUI tui;
     wire::contact::ContactManager contacts;
+    wire::network::RealSocketTransport socket;
 
-    // Generate local device identity key & master seed
-    wire::genesis::Key256 my_seed{}; my_seed.fill(0xA1);
-    wire::genesis::Key256 my_pubkey{}; my_pubkey.fill(0xB2);
-    auto my_genesis = wire::genesis::GenesisManager::create_genesis(my_seed, my_pubkey, 1700000000);
+    // Read environment setup for Peer A vs Peer B
+    const char* peer_env = std::getenv("PEER_NAME");
+    std::string my_peer_name = (peer_env != nullptr) ? peer_env : "Peer_A";
 
-    std::string my_armored_key = wire::genesis::GenesisManager::export_armored_key_file(my_genesis);
-    std::string my_qr_payload = wire::genesis::GenesisManager::export_qr_payload(my_genesis);
-    std::string my_pubkey_hex = "a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0";
+    uint16_t local_port = 9001;
+    uint16_t remote_port = 9002;
+    std::string remote_ip = "wire-peer-b";
 
-    wire::ui::TUIScreen current_screen = wire::ui::TUIScreen::MAIN_MENU;
-    std::string active_peer_alias = "";
+    if (my_peer_name == "Peer_B") {
+        local_port = 9002;
+        remote_port = 9001;
+        remote_ip = "wire-peer-a";
+    }
 
-    // Chat history per contact alias
-    std::unordered_map<std::string, std::vector<wire::ui::ChatBubble>> chat_histories;
+    // Bind real local UDP socket
+    if (!socket.bind_port(local_port)) {
+        // Fallback for running both on localhost
+        if (my_peer_name == "Peer_B") {
+            local_port = 9004;
+            remote_port = 9003;
+        } else {
+            local_port = 9003;
+            remote_port = 9004;
+        }
+        socket.bind_port(local_port);
+        remote_ip = "127.0.0.1";
+    }
 
-    while (true) {
-        if (current_screen == wire::ui::TUIScreen::MAIN_MENU) {
-            tui.render_main_menu(my_pubkey_hex, contacts.contact_count());
+    // Shared root key for entanglement
+    wire::crypto::Key256 shared_root_key{};
+    shared_root_key.fill(0x55);
 
-            std::string choice;
-            if (!std::getline(std::cin, choice)) break;
+    bool is_alice = (my_peer_name == "Peer_A");
+    wire::crypto::DoubleRatchet ratchet(shared_root_key, is_alice);
+    wire::ledger::MerkleDAGLedger ledger;
 
-            if (choice == "1") {
-                current_screen = wire::ui::TUIScreen::MY_GENESIS_KEY;
-            } else if (choice == "2") {
-                current_screen = wire::ui::TUIScreen::ADD_PEER_CONTACT;
-            } else if (choice == "3") {
-                if (contacts.contact_count() == 0) {
-                    std::cout << "\n[!] No contacts saved. Please select Option [2] to add a contact first!\n";
-                    std::cout << "Press ENTER to continue...";
-                    std::string dummy; std::getline(std::cin, dummy);
-                } else {
-                    auto clist = contacts.get_contact_list();
-                    active_peer_alias = clist[0].first;
-                    current_screen = wire::ui::TUIScreen::CHAT_INTERFACE;
+    std::string active_peer_alias = is_alice ? "Peer B" : "Peer A";
+
+    std::vector<std::pair<std::string, std::string>> contact_list = {
+        {active_peer_alias, "CONNECTED"}
+    };
+
+    std::vector<wire::ui::ChatBubble> chat_history;
+
+    tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+
+    std::atomic<bool> running{true};
+
+    // Background socket listener thread for receiving real incoming P2P messages
+    std::thread listener_thread([&]() {
+        while (running) {
+            auto packet_opt = socket.receive_packet();
+            if (packet_opt.has_value()) {
+                const auto& pkt = packet_opt.value();
+
+                // Decrypt incoming ciphertext payload
+                wire::crypto::RatchetHeader dummy_hdr{};
+                auto decrypted = ratchet.decrypt(dummy_hdr, pkt.data.data(), pkt.data.size());
+
+                if (decrypted.has_value()) {
+                    std::string plain_msg(decrypted->begin(), decrypted->end());
+                    ledger.append_message(pkt.data.data(), pkt.data.size(), 1700000000);
+
+                    // Add incoming green speech bubble
+                    chat_history.push_back({ active_peer_alias, plain_msg, "19:20", false });
+                    tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
                 }
-            } else if (choice == "4" || choice == "exit" || choice == "/quit") {
-                std::cout << "\n[SYSTEM] Exiting Project Wire. Ephemeral RAM keys purged.\n";
-                break;
             }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
-        else if (current_screen == wire::ui::TUIScreen::MY_GENESIS_KEY) {
-            tui.render_my_genesis_key(my_armored_key, my_qr_payload);
-            std::string dummy; std::getline(std::cin, dummy);
-            current_screen = wire::ui::TUIScreen::MAIN_MENU;
+    });
+
+    // Keyboard input loop for outgoing messages
+    std::string user_input;
+    while (std::getline(std::cin, user_input)) {
+        if (user_input == "/quit" || user_input == "exit" || user_input == "/exit") {
+            running = false;
+            break;
         }
-        else if (current_screen == wire::ui::TUIScreen::ADD_PEER_CONTACT) {
-            tui.render_add_peer_screen();
 
-            std::cout << "Step 1/2: Assign a Custom Local Display Name for this peer (e.g. Bob): ";
-            std::string alias;
-            if (!std::getline(std::cin, alias) || alias.empty()) {
-                current_screen = wire::ui::TUIScreen::MAIN_MENU;
-                continue;
-            }
-
-            std::cout << "\nStep 2/2: Paste Peer's Armored Key File / QR String Payload: ";
-            std::string key_input;
-            std::getline(std::cin, key_input);
-
-            // If empty or user typed test vector, auto-generate valid key payload
-            if (key_input.empty() || key_input.size() < 10) {
-                wire::genesis::Key256 peer_seed{}; peer_seed.fill(0x77);
-                wire::genesis::Key256 peer_pubkey{}; peer_pubkey.fill(0xCC);
-                auto peer_gen = wire::genesis::GenesisManager::create_genesis(peer_seed, peer_pubkey, 1700000000);
-                key_input = wire::genesis::GenesisManager::export_armored_key_file(peer_gen);
-            }
-
-            auto contact_id = contacts.add_contact_from_armored_file(alias, key_input);
-            if (!contact_id.has_value()) {
-                // Try fallback raw parsing
-                wire::genesis::Key256 peer_seed{}; peer_seed.fill(0x99);
-                wire::genesis::Key256 peer_pubkey{}; peer_pubkey.fill(0xDD);
-                auto peer_gen = wire::genesis::GenesisManager::create_genesis(peer_seed, peer_pubkey, 1700000000);
-                contacts.add_contact(alias, peer_gen);
-            }
-
-            std::cout << "\n[SUCCESS] Added peer contact '" << alias << "' successfully!\n";
-            std::cout << "Switching to active chat window...\n";
-            active_peer_alias = alias;
-            current_screen = wire::ui::TUIScreen::CHAT_INTERFACE;
+        if (user_input.empty()) {
+            tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+            continue;
         }
-        else if (current_screen == wire::ui::TUIScreen::CHAT_INTERFACE) {
-            auto* contact = contacts.find_contact_by_alias(active_peer_alias);
-            if (!contact) {
-                current_screen = wire::ui::TUIScreen::MAIN_MENU;
-                continue;
-            }
 
-            auto clist = contacts.get_contact_list();
-            auto& history = chat_histories[active_peer_alias];
+        // 1. Encrypt message with Double Ratchet
+        auto [hdr, ciphertext] = ratchet.encrypt(
+            reinterpret_cast<const uint8_t*>(user_input.data()), user_input.size());
 
-            tui.render_chat_layout(contact->custom_alias, true, clist, history);
+        // 2. Append to local Merkle-DAG ledger
+        ledger.append_message(ciphertext.data(), ciphertext.size(), 1700000000);
 
-            std::string user_input;
-            if (!std::getline(std::cin, user_input)) break;
+        // 3. Transmit real encrypted packet over UDP network socket
+        socket.send_packet(remote_ip, remote_port, ciphertext.data(), ciphertext.size());
+        // Backup transmit to localhost if running on same machine
+        socket.send_packet("127.0.0.1", remote_port, ciphertext.data(), ciphertext.size());
 
-            if (user_input == "/menu" || user_input == "/back") {
-                current_screen = wire::ui::TUIScreen::MAIN_MENU;
-                continue;
-            } else if (user_input == "/add") {
-                current_screen = wire::ui::TUIScreen::ADD_PEER_CONTACT;
-                continue;
-            } else if (user_input == "/quit" || user_input == "exit") {
-                std::cout << "\n[SYSTEM] Exiting Project Wire. Ephemeral RAM keys purged.\n";
-                break;
-            }
+        // 4. Render outgoing cyan speech bubble
+        chat_history.push_back({ "YOU", user_input, "19:20", true });
+        tui.render_chat_layout(active_peer_alias, true, contact_list, chat_history);
+    }
 
-            if (user_input.empty()) continue;
-
-            // 1. Encrypt and append outgoing message
-            auto [hdr, cipher] = contact->ratchet->encrypt(
-                reinterpret_cast<const uint8_t*>(user_input.data()), user_input.size());
-            contact->ledger->append_message(cipher.data(), cipher.size(), 1700000000);
-
-            history.push_back({ "YOU", user_input, "19:15", true });
-
-            // 2. Simulate incoming peer ACK reply
-            std::string reply_str = "ACK from " + contact->custom_alias + ": Ghost Bridge MAC tag verified!";
-            history.push_back({ contact->custom_alias, reply_str, "19:15", false });
-        }
+    running = false;
+    if (listener_thread.joinable()) {
+        listener_thread.join();
     }
 
     return 0;
