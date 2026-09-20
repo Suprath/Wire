@@ -8,6 +8,7 @@
 #include <iostream>
 #include <cassert>
 #include <fstream>
+#include <filesystem>
 
 void test_bootable_usb_portable_mode() {
     std::cout << "[TEST] Running Bootable USB / Live OS Portable Mode Test..." << std::endl;
@@ -19,7 +20,7 @@ void test_bootable_usb_portable_mode() {
     std::cout << "  - Host OS Default Data Dir: " << default_dir << std::endl;
 
     // 2. Enable Portable USB Mode
-    std::string usb_path = "/media/usb_drive/wire_data";
+    std::string usb_path = (std::filesystem::temp_directory_path() / "wire_usb_data").string();
     wire::update::UpdateManager::set_portable_mode(true, usb_path);
 
     assert(wire::update::UpdateManager::is_portable_mode() == true);
@@ -27,7 +28,8 @@ void test_bootable_usb_portable_mode() {
     std::cout << "  [PASS] Portable USB Mode enabled. Resolved USB path: " << usb_path << std::endl;
 
     // 3. Test Portable Snapshot Backup & Binary Update Preservation
-    auto backup = wire::update::UpdateManager::create_atomic_backup("/tmp/usb_wire_data");
+    std::string tmp_backup = (std::filesystem::temp_directory_path() / "usb_wire_backup").string();
+    auto backup = wire::update::UpdateManager::create_atomic_backup(tmp_backup);
     assert(backup.has_value());
     std::cout << "  [PASS] USB Portable snapshot backup created: " << backup.value() << std::endl;
 

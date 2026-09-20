@@ -8,6 +8,7 @@
 #include <iostream>
 #include <cassert>
 #include <fstream>
+#include <filesystem>
 
 void test_update_and_migration_engine() {
     std::cout << "[TEST] Running Zero-Loss App Update & Data Migration Test..." << std::endl;
@@ -17,8 +18,9 @@ void test_update_and_migration_engine() {
     assert(!data_dir.empty());
     std::cout << "  - Persistent user data directory resolved: " << data_dir << std::endl;
 
-    // 2. Create atomic snapshot backup
-    auto backup = wire::update::UpdateManager::create_atomic_backup("/tmp/test_wire_vault");
+    // 2. Create atomic snapshot backup using a cross-platform temp path
+    std::string tmp_vault = (std::filesystem::temp_directory_path() / "test_wire_vault").string();
+    auto backup = wire::update::UpdateManager::create_atomic_backup(tmp_vault);
     assert(backup.has_value());
     std::cout << "  [PASS] Atomic vault snapshot backup created: " << backup.value() << std::endl;
 
