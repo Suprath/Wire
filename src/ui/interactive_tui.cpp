@@ -34,6 +34,15 @@
 namespace {
 
 /**
+ * @struct PendingMessage
+ * @brief Queued message waiting to be sent when peer becomes verified.
+ */
+struct PendingMessage {
+    std::string text;
+    std::string timestamp;
+};
+
+/**
  * @struct PeerSession
  * @brief Encapsulates an active peer contact session and crypto state.
  */
@@ -43,10 +52,20 @@ struct PeerSession {
     uint16_t target_port;
     wire::crypto::DoubleRatchet ratchet;
     std::vector<wire::ui::ChatBubble> chat_history;
+    std::vector<PendingMessage> outgoing_queue;
+    std::chrono::steady_clock::time_point last_seen;
 
     PeerSession(const std::string& name, const std::string& ip, uint16_t port,
                 const wire::crypto::Key256& root_key, bool is_alice)
-        : alias(name), target_ip(ip), target_port(port), ratchet(root_key, is_alice) {}
+        : alias(name), target_ip(ip), target_port(port), ratchet(root_key, is_alice),
+          last_seen(std::chrono::steady_clock::time_point::min()) {}
+
+    bool is_verified() const {
+        if (last_seen == std::chrono::steady_clock::time_point::min()) return false;
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_seen).count();
+        return elapsed < 15;
+    }
 };
 
 #if defined(_WIN32)
@@ -123,6 +142,52 @@ wire::crypto::Key256 derive_key_from_passphrase(const std::string& passphrase) {
         key[(i * 7 + 3) % 32] = static_cast<uint8_t>(key[(i * 7 + 3) % 32] + c + i);
     }
     return key;
+}
+
+/** Get formatted current time string HH:MM */
+static std::string get_current_timestamp() {
+    auto now = std::chrono::system_clock::now();
+    std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_buf{};
+#if defined(_WIN32)
+    localtime_s(&tm_buf, &now_c);
+#else
+    localtime_r(&now_c, &tm_buf);
+#endif
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%H:%M", &tm_buf);
+    return std::string(buf);
+}
+
+/** Encrypt and transmit a payload over UDP socket to target peer */
+static bool send_encrypted_payload(wire::network::RealSocketTransport& socket,
+                                   wire::ledger::MerkleDAGLedger& ledger,
+                                   PeerSession& s,
+                                   const std::string& payload) {
+    auto [hdr, ciphertext] = s.ratchet.encrypt(
+        reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+
+    std::vector<uint8_t> wire_packet(sizeof(wire::crypto::RatchetHeader) + ciphertext.size());
+    std::memcpy(wire_packet.data(), &hdr, sizeof(hdr));
+    std::memcpy(wire_packet.data() + sizeof(hdr), ciphertext.data(), ciphertext.size());
+
+    ledger.append_message(wire_packet.data(), wire_packet.size(),
+                         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                             std::chrono::system_clock::now().time_since_epoch()).count()));
+
+    return socket.send_packet(s.target_ip, s.target_port, wire_packet.data(), wire_packet.size());
+}
+
+/** Flush and deliver any offline queued messages when peer becomes verified */
+static void flush_peer_queue(wire::network::RealSocketTransport& socket,
+                             wire::ledger::MerkleDAGLedger& ledger,
+                             PeerSession& s) {
+    if (s.outgoing_queue.empty()) return;
+    for (const auto& pending : s.outgoing_queue) {
+        std::string payload = "MSG|" + pending.timestamp + "|" + pending.text;
+        send_encrypted_payload(socket, ledger, s, payload);
+    }
+    s.outgoing_queue.clear();
 }
 
 } // anonymous namespace
@@ -248,19 +313,20 @@ int main() {
         auto auto_session = std::make_shared<PeerSession>(alias, target_ip, target_port, derived_key, is_alice);
         sessions.push_back(auto_session);
         active_session_index = 0;
+        send_encrypted_payload(socket, ledger, *auto_session, "__PING__");
         std::cout << "  [✓] Auto-paired peer \"" << alias << "\" at " << target_ip << ":" << target_port << "\n\n";
     }
 
     auto update_layout = [&]() {
         std::vector<std::pair<std::string, std::string>> contact_list;
         for (size_t i = 0; i < sessions.size(); ++i) {
-            std::string status = (static_cast<int>(i) == active_session_index) ? "CONNECTED" : "IDLE";
+            std::string status = sessions[i]->is_verified() ? "CONNECTED" : "SEARCHING";
             contact_list.push_back({sessions[i]->alias, status});
         }
 
         if (active_session_index >= 0 && active_session_index < static_cast<int>(sessions.size())) {
             auto s = sessions[static_cast<size_t>(active_session_index)];
-            tui.render_chat_layout(s->alias, true, contact_list, s->chat_history);
+            tui.render_chat_layout(s->alias, s->is_verified(), contact_list, s->chat_history);
         } else {
             std::vector<wire::ui::ChatBubble> empty_history;
             std::vector<std::pair<std::string, std::string>> empty_contacts = {
@@ -274,7 +340,7 @@ int main() {
 
     std::atomic<bool> running{true};
 
-    // ── 3. Background Socket Listener ───────────────────────────────────────
+    // ── 3. Background Socket Listener & Heartbeat Loops ───────────────────────
     std::thread listener_thread([&]() {
         while (running) {
             auto packet_opt = socket.receive_packet();
@@ -300,20 +366,37 @@ int main() {
                             std::string plain_msg(decrypted->begin(), decrypted->end());
                             ledger.append_message(pkt.data.data(), pkt.data.size(), 1700000000);
 
-                            // Dynamic Return Path Roaming: update target IP:Port if peer changed networks
+                            // Update last seen timestamp & dynamic return path roaming
+                            s->last_seen = std::chrono::steady_clock::now();
                             s->target_ip = pkt.sender_ip;
                             s->target_port = pkt.sender_port;
 
-                            s->chat_history.push_back({ s->alias, plain_msg, "19:20", false });
+                            // Deliver any pending offline messages now that connection is verified
+                            flush_peer_queue(socket, ledger, *s);
+
+                            if (plain_msg == "__PING__") {
+                                send_encrypted_payload(socket, ledger, *s, "__PONG__");
+                            } else if (plain_msg == "__PONG__") {
+                                // Keepalive response handled
+                            } else {
+                                std::string ts = get_current_timestamp();
+                                std::string txt = plain_msg;
+                                if (plain_msg.rfind("MSG|", 0) == 0) {
+                                    auto sep = plain_msg.find('|', 4);
+                                    if (sep != std::string::npos) {
+                                        ts = plain_msg.substr(4, sep - 4);
+                                        txt = plain_msg.substr(sep + 1);
+                                    }
+                                }
+                                s->chat_history.push_back({ s->alias, txt, ts, false });
+                                std::cout << "\a" << std::flush;
+                            }
 
                             if (active_session_index < 0) {
                                 active_session_index = static_cast<int>(i);
                             }
 
-                            if (static_cast<int>(i) == active_session_index) {
-                                update_layout();
-                                std::cout << "\a" << std::flush;
-                            }
+                            update_layout();
                             decrypted_any = true;
                             break;
                         }
@@ -331,6 +414,31 @@ int main() {
                 }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    });
+
+    std::thread heartbeat_thread([&]() {
+        while (running) {
+            std::this_thread::sleep_for(std::chrono::seconds(4));
+            if (!running) break;
+
+            bool layout_changed = false;
+            {
+                std::lock_guard<std::mutex> lock(session_mutex);
+                for (auto& s : sessions) {
+                    bool was_verified = s->is_verified();
+                    send_encrypted_payload(socket, ledger, *s, "__PING__");
+                    if (s->is_verified() && !s->outgoing_queue.empty()) {
+                        flush_peer_queue(socket, ledger, *s);
+                    }
+                    if (was_verified != s->is_verified()) {
+                        layout_changed = true;
+                    }
+                }
+                if (layout_changed) {
+                    update_layout();
+                }
+            }
         }
     });
 
@@ -476,6 +584,7 @@ int main() {
                 auto new_session = std::make_shared<PeerSession>(alias, peer_ip, peer_port, derived_key, is_alice);
                 sessions.push_back(new_session);
                 active_session_index = static_cast<int>(sessions.size()) - 1;
+                send_encrypted_payload(socket, ledger, *new_session, "__PING__");
             }
 
             std::cout << "  [✓] Peer \"" << alias << "\" added at " << peer_ip << ":" << peer_port << "\n\n";
@@ -533,35 +642,31 @@ int main() {
             continue;
         }
 
-        // 1. Encrypt message with Double Ratchet
-        auto [hdr, ciphertext] = active_session->ratchet.encrypt(
-            reinterpret_cast<const uint8_t*>(user_input.data()), user_input.size());
+        std::string ts = get_current_timestamp();
+        active_session->chat_history.push_back({ "YOU", user_input, ts, true });
 
-        // Construct wire packet: RatchetHeader (40 bytes) + Ciphertext
-        std::vector<uint8_t> wire_packet(sizeof(wire::crypto::RatchetHeader) + ciphertext.size());
-        std::memcpy(wire_packet.data(), &hdr, sizeof(hdr));
-        std::memcpy(wire_packet.data() + sizeof(hdr), ciphertext.data(), ciphertext.size());
-
-        // 2. Append to local Merkle-DAG ledger
-        ledger.append_message(wire_packet.data(), wire_packet.size(), 1700000000);
-
-        // 3. Transmit real encrypted packet over targeted UDP network socket
-        bool sent_ok = socket.send_packet(active_session->target_ip, active_session->target_port,
-                                           wire_packet.data(), wire_packet.size());
-
-        // 4. Render outgoing speech bubble
-        active_session->chat_history.push_back({ "YOU", user_input, "19:20", true });
-        update_layout();
-
-        if (!sent_ok) {
-            std::cout << "\n  [!] Error: Could not send packet to " << active_session->target_ip << ":"
-                      << active_session->target_port << ". Check IP address format & connection!\n\n" << std::flush;
+        if (active_session->is_verified()) {
+            std::string payload = "MSG|" + ts + "|" + user_input;
+            bool sent_ok = send_encrypted_payload(socket, ledger, *active_session, payload);
+            if (!sent_ok) {
+                std::cout << "\n  [!] Error: Could not send packet to " << active_session->target_ip << ":"
+                          << active_session->target_port << ". Check IP address format & connection!\n\n" << std::flush;
+            }
+        } else {
+            // Queue message locally until connection is verified
+            active_session->outgoing_queue.push_back({ user_input, ts });
+            send_encrypted_payload(socket, ledger, *active_session, "__PING__");
         }
+
+        update_layout();
     }
 
     running = false;
     if (listener_thread.joinable()) {
         listener_thread.join();
+    }
+    if (heartbeat_thread.joinable()) {
+        heartbeat_thread.join();
     }
 
     return 0;

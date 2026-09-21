@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ProjectWire VERSION 1.5.9 LANGUAGES CXX C)
+project(ProjectWire VERSION 1.6.0 LANGUAGES CXX C)
 
 # ── Version from git tag ──────────────────────────────────────────────────────
 # Automatically bakes the current git tag into the binary at compile time.
@@ -181,4 +181,8 @@ add_test(NAME iMessageTUITest COMMAND test_imessage_tui)
 add_executable(test_real_socket_transport tests/test_real_socket_transport.cpp)
 target_link_libraries(test_real_socket_transport PRIVATE wire_network)
 add_test(NAME RealSocketTransportTest COMMAND test_real_socket_transport)
+
+add_executable(test_verified_status_and_queue tests/test_verified_status_and_queue.cpp)
+target_link_libraries(test_verified_status_and_queue PRIVATE wire_crypto wire_network wire_ledger)
+add_test(NAME VerifiedStatusAndQueueTest COMMAND test_verified_status_and_queue)
 
