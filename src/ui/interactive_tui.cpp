@@ -477,9 +477,9 @@ int main() {
                             std::string plain_msg(decrypted->begin(), decrypted->end());
                             ledger.append_message(pkt.data.data(), pkt.data.size(), 1700000000);
 
-                            // Update last seen timestamp & dynamic IP roaming (preserve configured target_port to avoid OS ephemeral port corruption)
+                            // Update last seen timestamp & dynamic IP roaming (preserve configured target_ip and target_port to prevent Docker bridge IP corruption)
                             s->last_seen = std::chrono::steady_clock::now();
-                            if (!pkt.sender_ip.empty()) s->target_ip = pkt.sender_ip;
+                            if (s->target_ip.empty()) s->target_ip = pkt.sender_ip;
                             if (s->target_port == 0) s->target_port = pkt.sender_port;
 
                             // Deliver any pending offline messages now that connection is verified
