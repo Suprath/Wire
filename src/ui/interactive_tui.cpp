@@ -696,16 +696,44 @@ int main() {
             continue;
         }
 
-        // ── /importid ─────────────────────────────────────────────────────
-        if (user_input == "/importid" || user_input == "/import") {
-            std::cout << "\n  Import Genesis Key / Peer Identity Setup\n";
-            std::cout << "  ─────────────────────────────────────────────\n";
-            std::cout << "  Paste Armored Base64 Key block OR enter key file path: ";
-            std::cout << std::flush;
-            std::string key_input;
-            if (std::getline(std::cin, key_input)) {
-                trim_input(key_input);
-                std::string armored_content = key_input;
+        // ── /importid or pasted Genesis Key block ─────────────────────────
+        bool is_import_cmd = (user_input == "/importid" || user_input == "/import" ||
+                              user_input.rfind("/importid ", 0) == 0 || user_input.rfind("/import ", 0) == 0);
+        bool is_direct_pasted_key = (user_input.find("-----BEGIN PROJECT WIRE GENESIS KEY-----") != std::string::npos);
+
+        if (is_import_cmd || is_direct_pasted_key) {
+            std::string armored_content;
+
+            if (is_direct_pasted_key) {
+                armored_content = user_input + "\n";
+                if (user_input.find("-----END PROJECT WIRE GENESIS KEY-----") == std::string::npos) {
+                    std::string line;
+                    while (std::getline(std::cin, line)) {
+                        armored_content += line + "\n";
+                        if (line.find("-----END PROJECT WIRE GENESIS KEY-----") != std::string::npos) {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                std::string arg;
+                if (user_input.rfind("/importid ", 0) == 0) {
+                    arg = user_input.substr(10);
+                } else if (user_input.rfind("/import ", 0) == 0) {
+                    arg = user_input.substr(8);
+                }
+                trim_input(arg);
+
+                std::string key_input = arg;
+                if (key_input.empty()) {
+                    std::cout << "\n  Import Genesis Key / Peer Identity Setup\n";
+                    std::cout << "  ─────────────────────────────────────────────\n";
+                    std::cout << "  Paste Armored Base64 Key block OR enter key file path: ";
+                    std::cout << std::flush;
+                    if (!std::getline(std::cin, key_input)) continue;
+                    trim_input(key_input);
+                }
+
                 if (std::filesystem::exists(key_input)) {
                     std::ifstream kf(key_input);
                     if (kf.is_open()) {
@@ -713,56 +741,69 @@ int main() {
                         buffer << kf.rdbuf();
                         armored_content = buffer.str();
                     }
-                }
-
-                auto imported_opt = wire::genesis::GenesisManager::import_armored_key_file(armored_content);
-                if (!imported_opt.has_value()) {
-                    std::cout << "  [!] Error: Invalid or corrupt Genesis key payload.\n\n";
-                    continue;
-                }
-
-                const auto& imported = imported_opt.value();
-                std::string peer_hash = wire::contact::ContactManager::pubkey_to_hex(imported.peer_identity_pubkey);
-
-                std::cout << "  [✓] Verified Peer Identity Hash: " << peer_hash << "\n";
-                std::cout << "  Peer Nickname (display name): ";
-                std::cout << std::flush;
-                std::string alias;
-                std::getline(std::cin, alias);
-                trim_input(alias);
-                if (alias.empty()) alias = "Peer_" + peer_hash.substr(0, 8);
-
-                std::cout << "  Target IP:Port (e.g. 127.0.0.1:9002): ";
-                std::cout << std::flush;
-                std::string target_str;
-                std::getline(std::cin, target_str);
-                trim_input(target_str);
-
-                std::string target_ip = "127.0.0.1";
-                uint16_t target_port = 9002;
-                if (!target_str.empty()) {
-                    auto pos = target_str.find(':');
-                    if (pos != std::string::npos) {
-                        target_ip = target_str.substr(0, pos);
-                        try { target_port = static_cast<uint16_t>(std::stoi(target_str.substr(pos + 1))); } catch (...) {}
-                    } else {
-                        target_ip = target_str;
+                } else if (key_input.find("-----BEGIN") != std::string::npos) {
+                    armored_content = key_input + "\n";
+                    if (key_input.find("-----END") == std::string::npos) {
+                        std::string line;
+                        while (std::getline(std::cin, line)) {
+                            armored_content += line + "\n";
+                            if (line.find("-----END") == std::string::npos) {
+                                break;
+                            }
+                        }
                     }
+                } else {
+                    armored_content = key_input;
                 }
-
-                // Derive seed passphrase from master_seed
-                std::string seed_passphrase(imported.master_seed.begin(), imported.master_seed.end());
-
-                std::lock_guard<std::mutex> lock(session_mutex);
-                auto new_session = std::make_shared<PeerSession>(alias, target_ip, target_port, seed_passphrase, true);
-                sessions.push_back(new_session);
-                active_session_index = static_cast<int>(sessions.size()) - 1;
-                save_peers_to_file(sessions_json_path, sessions);
-
-                send_encrypted_payload(socket, ledger, *new_session, "__PING__");
-                std::cout << "  [✓] Authenticated Peer \"" << alias << "\" (Hash: " << peer_hash.substr(0, 16) << "...) added successfully!\n\n";
-                update_layout();
             }
+
+            auto imported_opt = wire::genesis::GenesisManager::import_armored_key_file(armored_content);
+            if (!imported_opt.has_value()) {
+                std::cout << "  [!] Error: Invalid or corrupt Genesis key payload.\n\n";
+                continue;
+            }
+
+            const auto& imported = imported_opt.value();
+            std::string peer_hash = wire::contact::ContactManager::pubkey_to_hex(imported.peer_identity_pubkey);
+
+            std::cout << "\n  [✓] Verified Peer Identity Hash: " << peer_hash << "\n";
+            std::cout << "  Peer Nickname (display name): ";
+            std::cout << std::flush;
+            std::string alias;
+            std::getline(std::cin, alias);
+            trim_input(alias);
+            if (alias.empty()) alias = "Peer_" + peer_hash.substr(0, 8);
+
+            std::cout << "  Target IP:Port (e.g. 127.0.0.1:9002): ";
+            std::cout << std::flush;
+            std::string target_str;
+            std::getline(std::cin, target_str);
+            trim_input(target_str);
+
+            std::string target_ip = "127.0.0.1";
+            uint16_t target_port = 9002;
+            if (!target_str.empty()) {
+                auto pos = target_str.find(':');
+                if (pos != std::string::npos) {
+                    target_ip = target_str.substr(0, pos);
+                    try { target_port = static_cast<uint16_t>(std::stoi(target_str.substr(pos + 1))); } catch (...) {}
+                } else {
+                    target_ip = target_str;
+                }
+            }
+
+            // Derive seed passphrase from master_seed
+            std::string seed_passphrase(imported.master_seed.begin(), imported.master_seed.end());
+
+            std::lock_guard<std::mutex> lock(session_mutex);
+            auto new_session = std::make_shared<PeerSession>(alias, target_ip, target_port, seed_passphrase, true);
+            sessions.push_back(new_session);
+            active_session_index = static_cast<int>(sessions.size()) - 1;
+            save_peers_to_file(sessions_json_path, sessions);
+
+            send_encrypted_payload(socket, ledger, *new_session, "__PING__");
+            std::cout << "  [✓] Authenticated Peer \"" << alias << "\" (Hash: " << peer_hash.substr(0, 16) << "...) added successfully!\n\n";
+            update_layout();
             continue;
         }
 
