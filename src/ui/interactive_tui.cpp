@@ -29,6 +29,9 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#else
+#include <sys/stat.h>
+#include <fcntl.h>
 #endif
 
 namespace {
@@ -42,6 +45,18 @@ struct PendingMessage {
     std::string timestamp;
 };
 
+/** Derive a 256-bit key from a user passphrase */
+static wire::crypto::Key256 derive_key_from_passphrase(const std::string& passphrase) {
+    wire::crypto::Key256 key{};
+    key.fill(0xAA); // Initial salt
+    for (size_t i = 0; i < passphrase.size(); ++i) {
+        uint8_t c = static_cast<uint8_t>(passphrase[i]);
+        key[i % 32] ^= c;
+        key[(i * 7 + 3) % 32] = static_cast<uint8_t>(key[(i * 7 + 3) % 32] + c + i);
+    }
+    return key;
+}
+
 /**
  * @struct PeerSession
  * @brief Encapsulates an active peer contact session and crypto state.
@@ -50,14 +65,17 @@ struct PeerSession {
     std::string alias;
     std::string target_ip;
     uint16_t target_port;
+    std::string passphrase;
+    bool is_alice;
     wire::crypto::DoubleRatchet ratchet;
     std::vector<wire::ui::ChatBubble> chat_history;
     std::vector<PendingMessage> outgoing_queue;
     std::chrono::steady_clock::time_point last_seen;
 
     PeerSession(const std::string& name, const std::string& ip, uint16_t port,
-                const wire::crypto::Key256& root_key, bool is_alice)
-        : alias(name), target_ip(ip), target_port(port), ratchet(root_key, is_alice),
+                const std::string& secret, bool role_alice)
+        : alias(name), target_ip(ip), target_port(port), passphrase(secret), is_alice(role_alice),
+          ratchet(derive_key_from_passphrase(secret), role_alice),
           last_seen(std::chrono::steady_clock::time_point::min()) {}
 
     bool is_verified() const {
@@ -132,17 +150,7 @@ static void trim_input(std::string& s) {
     }
 }
 
-/** Derive a 256-bit key from a user passphrase */
-wire::crypto::Key256 derive_key_from_passphrase(const std::string& passphrase) {
-    wire::crypto::Key256 key{};
-    key.fill(0xAA); // Initial salt
-    for (size_t i = 0; i < passphrase.size(); ++i) {
-        uint8_t c = static_cast<uint8_t>(passphrase[i]);
-        key[i % 32] ^= c;
-        key[(i * 7 + 3) % 32] = static_cast<uint8_t>(key[(i * 7 + 3) % 32] + c + i);
-    }
-    return key;
-}
+
 
 /** Get formatted current time string HH:MM */
 static std::string get_current_timestamp() {
@@ -188,6 +196,89 @@ static void flush_peer_queue(wire::network::RealSocketTransport& socket,
         send_encrypted_payload(socket, ledger, s, payload);
     }
     s.outgoing_queue.clear();
+}
+
+/** Save peer contact sessions to disk (sessions.json) */
+static void save_peers_to_file(const std::string& filepath, const std::vector<std::shared_ptr<PeerSession>>& sessions) {
+    std::ofstream ofs(filepath);
+    if (!ofs.is_open()) return;
+    ofs << "[\n";
+    for (size_t i = 0; i < sessions.size(); ++i) {
+        const auto& s = sessions[i];
+        ofs << "  {\n";
+        ofs << "    \"alias\": \"" << s->alias << "\",\n";
+        ofs << "    \"target_ip\": \"" << s->target_ip << "\",\n";
+        ofs << "    \"target_port\": " << s->target_port << ",\n";
+        ofs << "    \"passphrase\": \"" << s->passphrase << "\",\n";
+        ofs << "    \"is_alice\": " << (s->is_alice ? "true" : "false") << "\n";
+        ofs << "  }" << (i + 1 < sessions.size() ? "," : "") << "\n";
+    }
+    ofs << "]\n";
+}
+
+/** Restore saved peer contact sessions from disk on startup */
+static void load_peers_from_file(const std::string& filepath,
+                                 wire::network::RealSocketTransport& socket,
+                                 wire::ledger::MerkleDAGLedger& ledger,
+                                 std::vector<std::shared_ptr<PeerSession>>& sessions,
+                                 int& active_session_index) {
+    std::ifstream ifs(filepath);
+    if (!ifs.is_open()) return;
+    std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ifs.close();
+
+    size_t pos = 0;
+    while ((pos = content.find('{', pos)) != std::string::npos) {
+        size_t end_pos = content.find('}', pos);
+        if (end_pos == std::string::npos) break;
+        std::string block = content.substr(pos, end_pos - pos + 1);
+
+        auto extract_str = [&](const std::string& key) -> std::string {
+            size_t k = block.find("\"" + key + "\":");
+            if (k == std::string::npos) return "";
+            size_t q1 = block.find('"', k + key.size() + 3);
+            if (q1 == std::string::npos) return "";
+            size_t q2 = block.find('"', q1 + 1);
+            if (q2 == std::string::npos) return "";
+            return block.substr(q1 + 1, q2 - q1 - 1);
+        };
+
+        auto extract_int = [&](const std::string& key) -> int {
+            size_t k = block.find("\"" + key + "\":");
+            if (k == std::string::npos) return 0;
+            size_t start = k + key.size() + 3;
+            while (start < block.size() && (block[start] == ' ' || block[start] == ':')) start++;
+            try { return std::stoi(block.substr(start)); } catch (...) { return 0; }
+        };
+
+        auto extract_bool = [&](const std::string& key) -> bool {
+            return block.find("\"" + key + "\": true") != std::string::npos;
+        };
+
+        std::string alias = extract_str("alias");
+        std::string target_ip = extract_str("target_ip");
+        uint16_t target_port = static_cast<uint16_t>(extract_int("target_port"));
+        std::string passphrase = extract_str("passphrase");
+        bool is_alice = extract_bool("is_alice");
+
+        if (!alias.empty() && !passphrase.empty()) {
+            bool exists = false;
+            for (const auto& s : sessions) {
+                if (s->alias == alias) { exists = true; break; }
+            }
+            if (!exists) {
+                auto s = std::make_shared<PeerSession>(alias, target_ip, target_port, passphrase, is_alice);
+                sessions.push_back(s);
+                send_encrypted_payload(socket, ledger, *s, "__PING__");
+            }
+        }
+
+        pos = end_pos + 1;
+    }
+
+    if (!sessions.empty() && active_session_index < 0) {
+        active_session_index = 0;
+    }
 }
 
 } // anonymous namespace
@@ -286,9 +377,13 @@ int main() {
     std::cout << "\n  [✓] Listening on UDP port " << local_port << " as \"" << my_nickname << "\".\n\n";
 
     // ── 2. Session Management ────────────────────────────────────────────────
+    std::string sessions_json_path = (std::filesystem::path(data_dir) / "sessions.json").string();
     std::mutex session_mutex;
     std::vector<std::shared_ptr<PeerSession>> sessions;
     int active_session_index = -1;
+
+    // Load saved contacts from persistent storage (sessions.json)
+    load_peers_from_file(sessions_json_path, socket, ledger, sessions, active_session_index);
 
     // Auto-pair peer from environment variables if present (useful for Docker / automated node provisioning)
     const char* env_peer_alias = std::getenv("PEER_ALIAS");
@@ -309,12 +404,18 @@ int main() {
             is_alice = false;
         }
 
-        wire::crypto::Key256 derived_key = derive_key_from_passphrase(env_passphrase);
-        auto auto_session = std::make_shared<PeerSession>(alias, target_ip, target_port, derived_key, is_alice);
-        sessions.push_back(auto_session);
-        active_session_index = 0;
-        send_encrypted_payload(socket, ledger, *auto_session, "__PING__");
-        std::cout << "  [✓] Auto-paired peer \"" << alias << "\" at " << target_ip << ":" << target_port << "\n\n";
+        bool exists = false;
+        for (const auto& s : sessions) {
+            if (s->alias == alias) { exists = true; break; }
+        }
+        if (!exists) {
+            auto auto_session = std::make_shared<PeerSession>(alias, target_ip, target_port, env_passphrase, is_alice);
+            sessions.push_back(auto_session);
+            active_session_index = static_cast<int>(sessions.size()) - 1;
+            send_encrypted_payload(socket, ledger, *auto_session, "__PING__");
+            save_peers_to_file(sessions_json_path, sessions);
+            std::cout << "  [✓] Auto-paired peer \"" << alias << "\" at " << target_ip << ":" << target_port << "\n\n";
+        }
     }
 
     auto update_layout = [&]() {
@@ -442,6 +543,44 @@ int main() {
         }
     });
 
+#if !defined(_WIN32)
+    std::string fifo_path = "/tmp/wire_cmd.fifo";
+    mkfifo(fifo_path.c_str(), 0666);
+    std::thread fifo_thread([&]() {
+        while (running) {
+            int fd = open(fifo_path.c_str(), O_RDONLY);
+            if (fd >= 0) {
+                char buf[512];
+                ssize_t bytes = read(fd, buf, sizeof(buf) - 1);
+                close(fd);
+                if (bytes > 0) {
+                    buf[bytes] = '\0';
+                    std::string cmd(buf);
+                    trim_input(cmd);
+                    if (!cmd.empty()) {
+                        std::lock_guard<std::mutex> lock(session_mutex);
+                        if (active_session_index >= 0 && active_session_index < static_cast<int>(sessions.size())) {
+                            auto s = sessions[static_cast<size_t>(active_session_index)];
+                            std::string ts = get_current_timestamp();
+                            s->chat_history.push_back({ "YOU", cmd, ts, true });
+                            if (s->is_verified()) {
+                                std::string payload = "MSG|" + ts + "|" + cmd;
+                                send_encrypted_payload(socket, ledger, *s, payload);
+                            } else {
+                                s->outgoing_queue.push_back({ cmd, ts });
+                                send_encrypted_payload(socket, ledger, *s, "__PING__");
+                            }
+                            update_layout();
+                        }
+                    }
+                }
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        }
+    });
+#endif
+
     // ── 4. Keyboard Command & Message Loop ───────────────────────────────────
     auto print_help = [&]() {
         std::cout << "\n  ╔══════════════════════════════════════════════════╗\n";
@@ -460,7 +599,16 @@ int main() {
     print_help();
 
     std::string user_input;
-    while (std::getline(std::cin, user_input)) {
+    while (running) {
+        if (!std::getline(std::cin, user_input)) {
+            if (std::cin.eof()) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                std::cin.clear();
+                continue;
+            } else {
+                break;
+            }
+        }
         trim_input(user_input);
 
         // ── /quit ────────────────────────────────────────────────────────
@@ -577,14 +725,13 @@ int main() {
                 peer_ip = ip_port;
             }
 
-            wire::crypto::Key256 derived_key = derive_key_from_passphrase(passphrase);
-
             {
                 std::lock_guard<std::mutex> lock(session_mutex);
-                auto new_session = std::make_shared<PeerSession>(alias, peer_ip, peer_port, derived_key, is_alice);
+                auto new_session = std::make_shared<PeerSession>(alias, peer_ip, peer_port, passphrase, is_alice);
                 sessions.push_back(new_session);
                 active_session_index = static_cast<int>(sessions.size()) - 1;
                 send_encrypted_payload(socket, ledger, *new_session, "__PING__");
+                save_peers_to_file(sessions_json_path, sessions);
             }
 
             std::cout << "  [✓] Peer \"" << alias << "\" added at " << peer_ip << ":" << peer_port << "\n\n";
@@ -668,6 +815,11 @@ int main() {
     if (heartbeat_thread.joinable()) {
         heartbeat_thread.join();
     }
+#if !defined(_WIN32)
+    if (fifo_thread.joinable()) {
+        fifo_thread.join();
+    }
+#endif
 
     return 0;
 }
