@@ -129,15 +129,30 @@ std::pair<RatchetHeader, std::vector<uint8_t>> DoubleRatchet::encrypt(const uint
 }
 
 std::optional<std::vector<uint8_t>> DoubleRatchet::decrypt(const RatchetHeader& header, const uint8_t* ciphertext, size_t len) noexcept {
-    (void)header;
     if (len < 16) return std::nullopt; // Ciphertext too short for MAC tag
 
     size_t payload_len = len - 16;
 
-    // 1. Calculate candidate receiving KDF chain step WITHOUT mutating state yet
-    auto [next_chain, msg_key] = kdf_chain_step(m_receiving_chain_key);
+    // 1. Check if message is older than current recv sequence
+    if (header.message_num < m_recv_msg_num) {
+        return std::nullopt;
+    }
 
-    // 2. Generate keystream & MAC tag using ChaCha20 PRNG
+    // Protect against unreasonable sequence skips (max 1000 messages catch-up)
+    uint32_t steps_ahead = header.message_num - m_recv_msg_num;
+    if (steps_ahead > 1000) return std::nullopt;
+
+    // 2. Fast-forward receiving KDF chain step to match header.message_num
+    Key256 candidate_chain = m_receiving_chain_key;
+    Key256 msg_key{};
+
+    for (uint32_t step = 0; step <= steps_ahead; ++step) {
+        auto [next_chain, current_msg_key] = kdf_chain_step(candidate_chain);
+        candidate_chain = next_chain;
+        msg_key = current_msg_key;
+    }
+
+    // 3. Generate keystream & MAC tag using ChaCha20 PRNG
     ChaCha20PRNG cipher_prng(msg_key);
     ChaCha20PRNG::Nonce96 nonce{};
     nonce[0] = static_cast<uint8_t>(header.message_num & 0xFF);
@@ -153,7 +168,7 @@ std::optional<std::vector<uint8_t>> DoubleRatchet::decrypt(const RatchetHeader& 
         keystream.insert(keystream.end(), block.begin(), block.end());
     }
 
-    // 3. Constant-time MAC authentication verification
+    // 4. Constant-time MAC authentication verification
     bool mac_valid = true;
     for (size_t i = 0; i < 16; ++i) {
         if (ciphertext[payload_len + i] != keystream[payload_len + i]) {
@@ -168,11 +183,11 @@ std::optional<std::vector<uint8_t>> DoubleRatchet::decrypt(const RatchetHeader& 
         return std::nullopt;
     }
 
-    // 4. MAC verified! Advance receiving chain key state
-    m_receiving_chain_key = next_chain;
-    m_recv_msg_num++;
+    // 5. MAC verified! Advance receiving chain key state to matched candidate chain
+    m_receiving_chain_key = candidate_chain;
+    m_recv_msg_num = header.message_num + 1;
 
-    // 5. Decrypt payload
+    // 6. Decrypt payload
     std::vector<uint8_t> plaintext(payload_len);
     for (size_t i = 0; i < payload_len; ++i) {
         plaintext[i] = ciphertext[i] ^ keystream[i];

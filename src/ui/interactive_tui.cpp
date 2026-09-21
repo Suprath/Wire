@@ -225,6 +225,32 @@ int main() {
     std::vector<std::shared_ptr<PeerSession>> sessions;
     int active_session_index = -1;
 
+    // Auto-pair peer from environment variables if present (useful for Docker / automated node provisioning)
+    const char* env_peer_alias = std::getenv("PEER_ALIAS");
+    const char* env_peer_ip = std::getenv("PEER_TARGET_IP");
+    const char* env_peer_port = std::getenv("PEER_TARGET_PORT");
+    const char* env_passphrase = std::getenv("PEER_PASSPHRASE");
+    const char* env_role = std::getenv("PEER_ROLE");
+
+    if (env_peer_ip != nullptr && env_passphrase != nullptr) {
+        std::string alias = env_peer_alias ? env_peer_alias : "Peer";
+        std::string target_ip = env_peer_ip;
+        uint16_t target_port = 9001;
+        if (env_peer_port != nullptr) {
+            try { target_port = static_cast<uint16_t>(std::stoi(env_peer_port)); } catch (...) {}
+        }
+        bool is_alice = true;
+        if (env_role != nullptr && (std::string(env_role) == "2" || std::string(env_role) == "Bob" || std::string(env_role) == "bob")) {
+            is_alice = false;
+        }
+
+        wire::crypto::Key256 derived_key = derive_key_from_passphrase(env_passphrase);
+        auto auto_session = std::make_shared<PeerSession>(alias, target_ip, target_port, derived_key, is_alice);
+        sessions.push_back(auto_session);
+        active_session_index = 0;
+        std::cout << "  [✓] Auto-paired peer \"" << alias << "\" at " << target_ip << ":" << target_port << "\n\n";
+    }
+
     auto update_layout = [&]() {
         std::vector<std::pair<std::string, std::string>> contact_list;
         for (size_t i = 0; i < sessions.size(); ++i) {
