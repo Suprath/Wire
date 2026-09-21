@@ -468,7 +468,6 @@ int main() {
                     size_t ciphertext_len = pkt.data.size() - hdr_size;
 
                     std::lock_guard<std::mutex> lock(session_mutex);
-                    bool decrypted_any = false;
 
                     for (size_t i = 0; i < sessions.size(); ++i) {
                         auto& s = sessions[i];
@@ -509,20 +508,12 @@ int main() {
                             }
 
                             update_layout();
-                            decrypted_any = true;
                             break;
                         }
                     }
 
-                    if (!decrypted_any) {
-                        if (sessions.empty()) {
-                            std::cout << "\n  [!] Incoming packet from " << pkt.sender_ip << ":" << pkt.sender_port
-                                      << " received, but no peer is added yet! Use /add to pair.\n\n" << std::flush;
-                        } else {
-                            std::cout << "\n  [!] Incoming packet from " << pkt.sender_ip << ":" << pkt.sender_port
-                                      << " received, but decryption failed! Ensure both peers typed the EXACT same passphrase and chose OPPOSITE roles (one Initiator, one Responder).\n\n" << std::flush;
-                        }
-                    }
+                    // Suppress screen-corrupting raw std::cout warnings in interactive TUI background listener
+                    // Unrecognized packets are safely ignored without shifting/corrupting the interactive TUI canvas
                 }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
