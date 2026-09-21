@@ -375,12 +375,15 @@ int main() {
         }
     }
 
-    // Bind real local UDP socket
-    if (!socket.bind_port(local_port)) {
-        std::cout << "  [!] Port " << local_port << " busy, trying " << local_port + 1 << "...\n";
-        local_port += 1;
-        if (!socket.bind_port(local_port)) {
-            std::cout << "  [!] Error: Could not bind local UDP socket on port " << local_port << "\n";
+    // Bind real local UDP socket (automatically search next available port if busy)
+    uint16_t initial_port = local_port;
+    uint16_t attempts = 0;
+    while (!socket.bind_port(local_port)) {
+        std::cout << "  [!] Port " << local_port << " busy, trying " << (local_port + 1) << "...\n";
+        local_port++;
+        attempts++;
+        if (attempts >= 50) {
+            std::cout << "  [!] Error: Could not find an available UDP port in range " << initial_port << "-" << local_port << "\n";
             return 1;
         }
     }
