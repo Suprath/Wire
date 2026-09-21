@@ -118,6 +118,11 @@ bool UpdateManager::is_portable_mode() noexcept {
 std::string UpdateManager::get_user_data_directory() noexcept {
     if (s_portable_mode) return s_portable_path;
 
+    const char* env_dir = std::getenv("WIRE_DATA_DIR");
+    if (env_dir != nullptr && env_dir[0] != '\0') {
+        return std::string(env_dir);
+    }
+
 #if defined(_WIN32)
     const char* appdata = std::getenv("APPDATA");
     return appdata ? std::string(appdata) + "\\Wire\\data"
