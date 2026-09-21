@@ -477,7 +477,7 @@ int main() {
                             std::string plain_msg(decrypted->begin(), decrypted->end());
                             ledger.append_message(pkt.data.data(), pkt.data.size(), 1700000000);
 
-                            // Update last seen timestamp & dynamic IP roaming (preserve configured target_ip and target_port to prevent Docker bridge IP corruption)
+                            bool was_verified = s->is_verified();
                             s->last_seen = std::chrono::steady_clock::now();
                             if (s->target_ip.empty()) s->target_ip = pkt.sender_ip;
                             if (s->target_port == 0) s->target_port = pkt.sender_port;
@@ -485,10 +485,15 @@ int main() {
                             // Deliver any pending offline messages now that connection is verified
                             flush_peer_queue(socket, ledger, *s);
 
+                            bool need_layout_update = false;
+                            if (!was_verified && s->is_verified()) {
+                                need_layout_update = true;
+                            }
+
                             if (plain_msg == "__PING__") {
                                 send_encrypted_payload(socket, ledger, *s, "__PONG__");
                             } else if (plain_msg == "__PONG__") {
-                                // Keepalive response handled
+                                // Keepalive response handled — no screen clear needed
                             } else {
                                 std::string ts = get_current_timestamp();
                                 std::string txt = plain_msg;
@@ -501,13 +506,17 @@ int main() {
                                 }
                                 s->chat_history.push_back({ s->alias, txt, ts, false });
                                 std::cout << "\a" << std::flush;
+                                need_layout_update = true;
                             }
 
                             if (active_session_index < 0) {
                                 active_session_index = static_cast<int>(i);
+                                need_layout_update = true;
                             }
 
-                            update_layout();
+                            if (need_layout_update) {
+                                update_layout();
+                            }
                             break;
                         }
                     }
