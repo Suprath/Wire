@@ -24,3 +24,7 @@ cmake_install.cmake
 Makefile
 ninja.build
 compile_commands.json
+
+# Environment & Secrets
+.env
+.env.*
