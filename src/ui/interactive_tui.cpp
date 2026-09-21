@@ -332,6 +332,17 @@ int main() {
     std::cout << "  PROJECT WIRE — AETHER-seL4 SECURE P2P INTERACTIVE CLIENT\n";
     std::cout << "=======================================================================\n\n";
 
+    // ── Automatic Update Check on Boot / Startup ─────────────────────────────
+    std::cout << "  [UpdateManager] Checking for updates on GitHub Releases...\n";
+    auto update_check = wire::update::UpdateManager::check_github_updates("Suprath/Wire");
+    if (update_check.update_available) {
+        std::cout << "  [★] New update available: " << update_check.latest_version << "\n";
+        std::cout << "  [★] Applying automatic update patch...\n";
+        static_cast<void>(wire::update::UpdateManager::download_and_apply_update("Suprath/Wire"));
+    } else {
+        std::cout << "  [✓] Application is up to date.\n\n";
+    }
+
     std::string my_nickname = "User";
     const char* nick_env = std::getenv("MY_NICKNAME");
     if (nick_env == nullptr) nick_env = std::getenv("PEER_NAME");
