@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ProjectWire VERSION 1.6.0 LANGUAGES CXX C)
+project(ProjectWire VERSION 1.6.1 LANGUAGES CXX C)
 
 # ── Version from git tag ──────────────────────────────────────────────────────
 # Automatically bakes the current git tag into the binary at compile time.
