@@ -477,10 +477,10 @@ int main() {
                             std::string plain_msg(decrypted->begin(), decrypted->end());
                             ledger.append_message(pkt.data.data(), pkt.data.size(), 1700000000);
 
-                            // Update last seen timestamp & dynamic return path roaming
+                            // Update last seen timestamp & dynamic IP roaming (preserve configured target_port to avoid OS ephemeral port corruption)
                             s->last_seen = std::chrono::steady_clock::now();
-                            s->target_ip = pkt.sender_ip;
-                            s->target_port = pkt.sender_port;
+                            if (!pkt.sender_ip.empty()) s->target_ip = pkt.sender_ip;
+                            if (s->target_port == 0) s->target_port = pkt.sender_port;
 
                             // Deliver any pending offline messages now that connection is verified
                             flush_peer_queue(socket, ledger, *s);
@@ -768,6 +768,22 @@ int main() {
 
             std::cout << "  [✓] Switched active chat to \"" << target << "\"\n\n";
             update_layout();
+            continue;
+        }
+
+        // ── /resync ───────────────────────────────────────────────────────
+        if (user_input == "/resync" || user_input == "/reset") {
+            std::lock_guard<std::mutex> lock(session_mutex);
+            if (active_session_index >= 0 && active_session_index < static_cast<int>(sessions.size())) {
+                auto s = sessions[static_cast<size_t>(active_session_index)];
+                s->ratchet = wire::crypto::DoubleRatchet(derive_key_from_passphrase(s->passphrase), s->is_alice);
+                s->last_seen = std::chrono::steady_clock::time_point::min();
+                send_encrypted_payload(socket, ledger, *s, "__PING__");
+                std::cout << "  [✓] Session ratchet resynchronized for \"" << s->alias << "\". Sending handshake probe...\n\n";
+                update_layout();
+            } else {
+                std::cout << "  [!] No active peer session to resynchronize.\n\n";
+            }
             continue;
         }
 

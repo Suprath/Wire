@@ -61,13 +61,10 @@ bool RealSocketTransport::bind_port(uint16_t port) noexcept {
     fcntl(m_sockfd, F_SETFL, flags | O_NONBLOCK);
 #endif
 
-    // Reuse address and enable broadcast
+    // Reuse address and enable broadcast (SO_REUSEPORT omitted so duplicate instances fail with port busy)
     int optval = 1;
     setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&optval), sizeof(optval));
     setsockopt(m_sockfd, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&optval), sizeof(optval));
-#if defined(SO_REUSEPORT)
-    setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEPORT, reinterpret_cast<const char*>(&optval), sizeof(optval));
-#endif
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -115,8 +112,13 @@ bool RealSocketTransport::send_packet(const std::string& target_ip, uint16_t tar
         }
 
         if (resolved && dest.sin_addr.s_addr != 0) {
+#if defined(_WIN32)
             wire_ssize_t sent = sendto(m_sockfd, reinterpret_cast<const char*>(data), static_cast<int>(len), 0,
                                   reinterpret_cast<sockaddr*>(&dest), sizeof(dest));
+#else
+            wire_ssize_t sent = sendto(m_sockfd, reinterpret_cast<const char*>(data), len, 0,
+                                  reinterpret_cast<sockaddr*>(&dest), sizeof(dest));
+#endif
             if (sent == static_cast<wire_ssize_t>(len)) {
                 any_sent = true;
             }
