@@ -107,11 +107,14 @@ public:
      */
     [[nodiscard]] size_t contact_count() const noexcept { return m_contacts.size(); }
 
+    /**
+     * @brief Converts 256-bit public key to 64-character hexadecimal string.
+     */
+    [[nodiscard]] static std::string pubkey_to_hex(const crypto::Key256& key) noexcept;
+
 private:
     std::unordered_map<std::string, std::unique_ptr<PeerContact>> m_contacts; // ID -> Contact mapping
     std::unordered_map<std::string, std::string> m_alias_to_id;               // Alias -> ID mapping
-
-    [[nodiscard]] static std::string pubkey_to_hex(const crypto::Key256& key) noexcept;
 };
 
 } // namespace wire::contact
