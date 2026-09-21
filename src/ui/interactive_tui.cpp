@@ -665,6 +665,19 @@ int main() {
                 static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count())
             );
 
+            std::string seed_passphrase(master_seed.begin(), master_seed.end());
+
+            {
+                std::lock_guard<std::mutex> lock(session_mutex);
+                if (active_session_index >= 0 && active_session_index < static_cast<int>(sessions.size())) {
+                    auto s = sessions[static_cast<size_t>(active_session_index)];
+                    s->passphrase = seed_passphrase;
+                    s->ratchet = wire::crypto::DoubleRatchet(derive_key_from_passphrase(seed_passphrase), s->is_alice);
+                    s->last_seen = std::chrono::steady_clock::time_point::min();
+                    save_peers_to_file(sessions_json_path, sessions);
+                }
+            }
+
             std::string armored_key = wire::genesis::GenesisManager::export_armored_key_file(payload);
             std::filesystem::path export_file = std::filesystem::path(data_dir) / "wire_genesis_export.key";
             std::ofstream ofs(export_file);
